@@ -1,0 +1,93 @@
+{
+  "schema_version": "2.0",
+  "generated_at_utc": "2026-08-18T10:25:13.495243Z",
+  "source": "IBKR",
+  "timeframe": "1H",
+  "policy": {
+    "completed_h1_only_for_structure": true,
+    "snapshot_for_proximity_only": true,
+    "watch_level": 1,
+    "analysis_trigger_level": 2,
+    "confirmed_level": 3,
+    "wework_env": "WEWORK_WEBHOOK_URL"
+  },
+  "symbols": [
+    {
+      "symbol": "GC",
+      "timeframe": "1H",
+      "timestamp_utc": "2026-08-18T10:25:13.344204Z",
+      "completed_h1_utc": "2026-08-18T09:00:00Z",
+      "beijing_time": "2026-08-18 17:00",
+      "price": 4416.7,
+      "price_source": "completed H1 close",
+      "trend": "MIXED",
+      "structure": "HH/HL",
+      "atr14": 12.928571428571558,
+      "profile": {
+        "mode": "VP",
+        "window_h1": 120,
+        "poc": 4409.945238095239,
+        "vah": 4442.090476190476,
+        "val": 4391.776190476191,
+        "hvn": [
+          4412.740476190476,
+          4395.969047619048,
+          4443.488095238095
+        ],
+        "lvn": [
+          4354.0404761904765,
+          4356.835714285715,
+          4362.426190476191
+        ]
+      },
+      "extension": {
+        "price_z20": -1.1091671199819002,
+        "ema20_atr_distance": -0.5706097860557032,
+        "ema50_atr_distance": -0.10453155391140327,
+        "no_chase_long": false,
+        "no_chase_short": false,
+        "rvol20": 0.2967799376762131
+      },
+      "location": {
+        "setup_status": "NO_SETUP",
+        "alert_level": 0,
+        "candidate_direction": "LONG",
+        "score": 40,
+        "analysis_required": false,
+        "nearest_level": 4408.0,
+        "distance_atr": 0.6729281767955593,
+        "touches": 1,
+        "profile_feature": "POC",
+        "profile_distance_atr": 0.1504604051565979,
+        "ema_confluence": [],
+        "rejection": true,
+        "long": {
+          "direction": "LONG",
+          "score": 40,
+          "level": 4408.0,
+          "touches": 1,
+          "distance_atr": 0.6729281767955593,
+          "profile_feature": "POC",
+          "profile_price": 4409.945238095239,
+          "profile_distance_atr": 0.1504604051565979,
+          "ema_confluence": [],
+          "rejection": true
+        },
+        "short": {
+          "direction": "SHORT",
+          "score": 17,
+          "level": 4420.8,
+          "touches": 1,
+          "distance_atr": 0.31712707182322936,
+          "profile_feature": "HVN",
+          "profile_price": 4412.740476190476,
+          "profile_distance_atr": 0.623388581952115,
+          "ema_confluence": [],
+          "rejection": false
+        }
+      },
+      "divergence": "BEARISH DIVERGENCE",
+      "chart": "C:\\Users\\Administrator\\Documents\\ChatGPT\\MT5_SERVER\\ibkr_technical_output\\GC_1H.png"
+    }
+  ]
+}

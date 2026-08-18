@@ -1,0 +1,2 @@
+﻿Symbol,Error
+石油,未知品种 '石油'。6 字母外汇可自动识别；其他品种请在 SPECIAL_CONTRACTS 中添加 IB 合约映射。

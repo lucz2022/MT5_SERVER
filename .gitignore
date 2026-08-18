@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+*.png
+mt5-gpt-data/

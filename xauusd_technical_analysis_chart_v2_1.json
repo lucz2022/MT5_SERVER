@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "symbols": [
+    {
+      "code": "GC",
+      "name": "黄金期货",
+      "enabled": true
+    },
+    {
+      "code": "ES",
+      "name": "标普500 E-mini",
+      "enabled": true
+    },
+    {
+      "code": "NQ",
+      "name": "纳斯达克100 E-mini",
+      "enabled": true
+    }
+  ]
+}

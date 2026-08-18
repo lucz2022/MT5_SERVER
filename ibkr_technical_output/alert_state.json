@@ -1,0 +1,11 @@
+{
+  "GC": {
+    "setup_status": "NO_SETUP",
+    "alert_level": 0,
+    "candidate_direction": "LONG",
+    "nearest_level": 4408.0,
+    "zone_key": "LONG:3410",
+    "completed_h1_utc": "2026-08-18T09:00:00Z",
+    "updated_at_utc": "2026-08-18T10:25:13.504946Z"
+  }
+}
