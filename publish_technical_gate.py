@@ -7,7 +7,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +17,19 @@ DEFAULT_REPO = ROOT / "mt5-gpt-data"
 DEFAULT_PRODUCER = ROOT / "xauusd_technical_analysis_chart_v2_1.py"
 DEFAULT_OUTPUT = ROOT / "ibkr_technical_runtime"
 DEFAULT_STATE = DEFAULT_OUTPUT / "gate_publish_state.json"
+BEIJING = timezone(timedelta(hours=8))
+ANALYSIS_WINDOW_START_BEIJING_HOUR = 7
 PUBLISH_PATHS = (
     "runtime/technical_gate/technical_triggers.json",
     "latest/technical_gate.json",
     "latest/technical_klines.json",
 )
+
+
+def within_analysis_window(now: datetime | None = None) -> bool:
+    """The analysis workflow consumes the Gate from Beijing 07:20; earlier pushes have no reader."""
+    moment = (now or datetime.now(UTC)).astimezone(BEIJING)
+    return moment.hour >= ANALYSIS_WINDOW_START_BEIJING_HOUR
 
 
 def run(command: list[str], *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -146,6 +154,21 @@ def changed_paths(repo: Path) -> set[str]:
     return paths
 
 
+def sync_with_rebase(repo: Path, *, attempts: int = 3) -> None:
+    """Rebase local commits onto origin/main while tolerating unrelated dirty files."""
+    for attempt in range(1, attempts + 1):
+        pulled = run(
+            ["git", "pull", "--rebase", "--autostash", "origin", "main"],
+            cwd=repo,
+            check=False,
+        )
+        if pulled.returncode == 0:
+            return
+        run(["git", "rebase", "--abort"], cwd=repo, check=False)
+        print(f"[RETRY] sync rebase {attempt}/{attempts}", flush=True)
+    raise RuntimeError("could not sync Technical Gate workspace onto origin/main")
+
+
 def push_with_rebase(repo: Path, *, attempts: int = 3) -> None:
     """Publish safely when the independent feed updates main during IBKR collection."""
     for attempt in range(1, attempts + 1):
@@ -214,6 +237,18 @@ def write_success_state(
         )
 
 
+def write_skip_state(path: Path, previous_state: dict[str, Any]) -> None:
+    payload = dict(previous_state) if isinstance(previous_state, dict) else {}
+    payload.update(
+        {
+            "updated_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "publisher_status": "skipped_out_of_analysis_window",
+            "publisher_error": None,
+        }
+    )
+    write_json(path, payload)
+
+
 def record_publisher_failure(path: Path, error: Exception, *, notify: bool) -> None:
     state = load_json(path, {})
     if not isinstance(state, dict):
@@ -241,7 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--producer", type=Path, default=DEFAULT_PRODUCER)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE)
-    parser.add_argument("--force-publish", action="store_true")
+    parser.add_argument("--force-publish", action="store_true",
+                        help="publish even without material change or outside the analysis window")
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-push", action="store_true")
     parser.add_argument("--no-wework", action="store_true")
@@ -258,9 +294,14 @@ def main(args: argparse.Namespace | None = None) -> int:
     if not producer.is_file():
         raise SystemExit(f"[FATAL] producer missing: {producer}")
 
+    if not args.force_publish and not within_analysis_window():
+        write_skip_state(state_path, load_json(state_path, {}))
+        print("[SKIP] outside analysis window (Beijing 00:00-06:59); nothing published")
+        return 0
+
     assert_clean(repo)
     if not args.no_pull:
-        run(["git", "pull", "--ff-only"], cwd=repo)
+        sync_with_rebase(repo)
     assert_clean(repo)
     baseline_changes = changed_paths(repo)
 

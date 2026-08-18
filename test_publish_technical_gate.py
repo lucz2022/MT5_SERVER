@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from publish_technical_gate import (
+    BEIJING,
     PUBLISH_PATHS,
     assert_clean,
     notify_publisher_status,
     publication_reasons,
     push_with_rebase,
+    sync_with_rebase,
     update_failure_counts,
+    within_analysis_window,
+    write_skip_state,
 )
 
 
@@ -92,6 +99,46 @@ class TechnicalGatePublisherTests(unittest.TestCase):
             cwd=Path("repo"),
             check=False,
         )
+
+    @patch("publish_technical_gate.run")
+    def test_sync_rebases_with_autostash_and_recovers_after_failure(self, mocked_run):
+        failed = type("Result", (), {"returncode": 1})()
+        succeeded = type("Result", (), {"returncode": 0})()
+        mocked_run.side_effect = [failed, succeeded, succeeded]
+        sync_with_rebase(Path("repo"))
+        self.assertEqual(mocked_run.call_count, 3)
+        self.assertEqual(
+            mocked_run.call_args_list[0].args[0],
+            ["git", "pull", "--rebase", "--autostash", "origin", "main"],
+        )
+        self.assertEqual(
+            mocked_run.call_args_list[1].args[0],
+            ["git", "rebase", "--abort"],
+        )
+        self.assertEqual(
+            mocked_run.call_args_list[2].args[0],
+            ["git", "pull", "--rebase", "--autostash", "origin", "main"],
+        )
+
+    def test_analysis_window_boundaries_follow_beijing_hour(self):
+        self.assertFalse(within_analysis_window(datetime(2026, 8, 19, 6, 59, tzinfo=BEIJING)))
+        self.assertTrue(within_analysis_window(datetime(2026, 8, 19, 7, 0, tzinfo=BEIJING)))
+        self.assertTrue(within_analysis_window(datetime(2026, 8, 19, 23, 30, tzinfo=BEIJING)))
+        self.assertFalse(within_analysis_window(datetime(2026, 8, 19, 0, 5, tzinfo=BEIJING)))
+        self.assertTrue(within_analysis_window(datetime(2026, 8, 18, 23, 5, tzinfo=BEIJING)))
+
+    def test_skip_state_marks_window_without_clearing_gate_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            write_skip_state(
+                state_path,
+                {"last_completed_h1_utc": "2026-08-18T15:00:00Z", "publisher_failure_count": 2},
+            )
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["publisher_status"], "skipped_out_of_analysis_window")
+            self.assertIsNone(state["publisher_error"])
+            self.assertEqual(state["last_completed_h1_utc"], "2026-08-18T15:00:00Z")
+            self.assertEqual(state["publisher_failure_count"], 2)
 
     @patch.dict(
         "os.environ",
