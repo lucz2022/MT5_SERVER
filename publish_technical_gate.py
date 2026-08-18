@@ -27,9 +27,9 @@ PUBLISH_PATHS = (
 
 
 def within_analysis_window(now: datetime | None = None) -> bool:
-    """The analysis workflow consumes the Gate from Beijing 07:20; earlier pushes have no reader."""
+    """The analysis workflow consumes the Gate on Beijing weekdays 07:20-23:20."""
     moment = (now or datetime.now(UTC)).astimezone(BEIJING)
-    return moment.hour >= ANALYSIS_WINDOW_START_BEIJING_HOUR
+    return moment.weekday() < 5 and moment.hour >= ANALYSIS_WINDOW_START_BEIJING_HOUR
 
 
 def run(command: list[str], *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -237,16 +237,22 @@ def write_success_state(
         )
 
 
-def write_skip_state(path: Path, previous_state: dict[str, Any]) -> None:
-    payload = dict(previous_state) if isinstance(previous_state, dict) else {}
-    payload.update(
+def write_skip_state(
+    path: Path,
+    payload: dict[str, Any],
+    previous_state: dict[str, Any],
+) -> None:
+    """Record an out-of-window round: the producer ran locally, nothing was published."""
+    merged = dict(previous_state) if isinstance(previous_state, dict) else {}
+    merged.update(payload)
+    merged.update(
         {
             "updated_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "publisher_status": "skipped_out_of_analysis_window",
             "publisher_error": None,
         }
     )
-    write_json(path, payload)
+    write_json(path, merged)
 
 
 def record_publisher_failure(path: Path, error: Exception, *, notify: bool) -> None:
@@ -293,11 +299,6 @@ def main(args: argparse.Namespace | None = None) -> int:
         raise SystemExit(f"[FATAL] not a Git repository: {repo}")
     if not producer.is_file():
         raise SystemExit(f"[FATAL] producer missing: {producer}")
-
-    if not args.force_publish and not within_analysis_window():
-        write_skip_state(state_path, load_json(state_path, {}))
-        print("[SKIP] outside analysis window (Beijing 00:00-06:59); nothing published")
-        return 0
 
     assert_clean(repo)
     if not args.no_pull:
@@ -354,6 +355,16 @@ def main(args: argparse.Namespace | None = None) -> int:
             state_path, state_payload, previous_state, notify=not args.no_wework
         )
         print("[SKIP] no material Gate change")
+        return 0 if producer_result.returncode == 0 else producer_result.returncode
+
+    if not args.force_publish and not within_analysis_window():
+        if publish_changes:
+            run(["git", "restore", "--", *PUBLISH_PATHS], cwd=repo)
+        write_skip_state(state_path, state_payload, previous_state)
+        print(
+            "[SKIP] outside analysis window (Beijing overnight/weekend); "
+            "Gate produced locally and alerts delivered, nothing published"
+        )
         return 0 if producer_result.returncode == 0 else producer_result.returncode
 
     print("[PUBLISH] " + ", ".join(reasons))

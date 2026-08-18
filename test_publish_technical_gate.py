@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import json
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import publish_technical_gate as publish_technical_gate_main_module
 from publish_technical_gate import (
     BEIJING,
     PUBLISH_PATHS,
@@ -19,6 +22,10 @@ from publish_technical_gate import (
     within_analysis_window,
     write_skip_state,
 )
+
+
+def publisher_main(args):
+    return publish_technical_gate_main_module.main(args)
 
 
 def gate(h1: str, *, status: str = "ok", setup: str = "NO_SETUP") -> dict:
@@ -120,25 +127,87 @@ class TechnicalGatePublisherTests(unittest.TestCase):
             ["git", "pull", "--rebase", "--autostash", "origin", "main"],
         )
 
-    def test_analysis_window_boundaries_follow_beijing_hour(self):
+    def test_analysis_window_boundaries_follow_beijing_weekday_and_hour(self):
         self.assertFalse(within_analysis_window(datetime(2026, 8, 19, 6, 59, tzinfo=BEIJING)))
         self.assertTrue(within_analysis_window(datetime(2026, 8, 19, 7, 0, tzinfo=BEIJING)))
         self.assertTrue(within_analysis_window(datetime(2026, 8, 19, 23, 30, tzinfo=BEIJING)))
         self.assertFalse(within_analysis_window(datetime(2026, 8, 19, 0, 5, tzinfo=BEIJING)))
-        self.assertTrue(within_analysis_window(datetime(2026, 8, 18, 23, 5, tzinfo=BEIJING)))
+        self.assertTrue(within_analysis_window(datetime(2026, 8, 17, 7, 5, tzinfo=BEIJING)))
+        self.assertTrue(within_analysis_window(datetime(2026, 8, 21, 23, 5, tzinfo=BEIJING)))
+        self.assertFalse(within_analysis_window(datetime(2026, 8, 22, 7, 5, tzinfo=BEIJING)))
+        self.assertFalse(within_analysis_window(datetime(2026, 8, 23, 12, 0, tzinfo=BEIJING)))
 
-    def test_skip_state_marks_window_without_clearing_gate_fields(self):
+    def test_skip_state_merges_round_payload_and_previous_state(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / "state.json"
             write_skip_state(
                 state_path,
+                {
+                    "consecutive_failures": {"XAUUSD": 1},
+                    "last_completed_h1_utc": "2026-08-18T22:00:00Z",
+                },
                 {"last_completed_h1_utc": "2026-08-18T15:00:00Z", "publisher_failure_count": 2},
             )
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["publisher_status"], "skipped_out_of_analysis_window")
             self.assertIsNone(state["publisher_error"])
-            self.assertEqual(state["last_completed_h1_utc"], "2026-08-18T15:00:00Z")
+            self.assertEqual(state["last_completed_h1_utc"], "2026-08-18T22:00:00Z")
             self.assertEqual(state["publisher_failure_count"], 2)
+            self.assertEqual(state["consecutive_failures"], {"XAUUSD": 1})
+
+    def test_out_of_window_round_runs_producer_but_publishes_nothing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir()
+            old_gate = {"common_completed_h1_utc": "2026-08-18T15:00:00Z", "symbols": []}
+            for relative in PUBLISH_PATHS:
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(old_gate), encoding="utf-8")
+            producer = root / "producer.py"
+            producer.write_text(
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "repo = Path(sys.argv[sys.argv.index('--repo-root') + 1])\n"
+                "gate = json.loads((repo / 'runtime/technical_gate/technical_triggers.json').read_text())\n"
+                "gate['common_completed_h1_utc'] = '2026-08-18T23:00:00Z'\n"
+                "(repo / 'runtime/technical_gate/technical_triggers.json').write_text(json.dumps(gate))\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+            state_path = root / "state.json"
+
+            args = argparse.Namespace(
+                repo_root=repo,
+                producer=producer,
+                output_dir=root / "output",
+                state_file=state_path,
+                force_publish=False,
+                no_pull=True,
+                no_push=True,
+                no_wework=True,
+            )
+            with patch("publish_technical_gate.within_analysis_window", return_value=False):
+                exit_code = publisher_main(args)
+
+            self.assertEqual(exit_code, 0)
+            commits = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=repo, text=True, capture_output=True, check=True,
+            ).stdout.strip()
+            self.assertEqual(commits, "1")
+            restored = json.loads(
+                (repo / "runtime/technical_gate/technical_triggers.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(restored["common_completed_h1_utc"], "2026-08-18T15:00:00Z")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["publisher_status"], "skipped_out_of_analysis_window")
+            self.assertEqual(state["last_completed_h1_utc"], "2026-08-18T23:00:00Z")
 
     @patch.dict(
         "os.environ",
