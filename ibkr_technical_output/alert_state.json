@@ -1,11 +1,39 @@
 {
   "GC": {
+    "setup_status": "WATCH_SHORT",
+    "alert_level": 1,
+    "candidate_direction": "SHORT",
+    "best_side_level": 4420.8,
+    "zone_key": "SHORT:3513",
+    "completed_h1_utc": "2026-08-18T12:00:00Z",
+    "updated_at_utc": "2026-08-18T13:21:30.074646Z",
+    "last_sent_utc": "2026-08-18T13:09:38.005365Z"
+  },
+  "ES": {
+    "setup_status": "WATCH_SHORT",
+    "alert_level": 1,
+    "candidate_direction": "SHORT",
+    "best_side_level": 7738.0,
+    "zone_key": "SHORT:7445",
+    "completed_h1_utc": "2026-08-18T12:00:00Z",
+    "updated_at_utc": "2026-08-18T13:21:30.074715Z"
+  },
+  "NQ": {
     "setup_status": "NO_SETUP",
     "alert_level": 0,
-    "candidate_direction": "LONG",
-    "nearest_level": 4408.0,
-    "zone_key": "LONG:3410",
-    "completed_h1_utc": "2026-08-18T09:00:00Z",
-    "updated_at_utc": "2026-08-18T10:25:13.504946Z"
+    "candidate_direction": "SHORT",
+    "best_side_level": 29718.75,
+    "zone_key": "SHORT:3689",
+    "completed_h1_utc": "2026-08-18T12:00:00Z",
+    "updated_at_utc": "2026-08-18T13:21:30.074734Z"
+  },
+  "YM": {
+    "setup_status": "NO_SETUP",
+    "alert_level": 0,
+    "candidate_direction": "SHORT",
+    "best_side_level": 53558.0,
+    "zone_key": "SHORT:8097",
+    "completed_h1_utc": "2026-08-18T12:00:00Z",
+    "updated_at_utc": "2026-08-18T13:21:30.074749Z"
   }
 }

@@ -103,9 +103,29 @@ OUTPUT_HEIGHT_PX = 2560
 OUTPUT_DPI = 180
 WEWORK_WEBHOOK_ENV = "WEWORK_WEBHOOK_URL"
 TRIGGER_FILE_NAME = "technical_triggers.json"
+KLINES_FILE_NAME = "technical_klines.json"
 ALERT_STATE_FILE_NAME = "alert_state.json"
 PROFILE_BINS = 42
 DEFAULT_SYMBOL_CONFIG = Path(__file__).with_suffix(".json")
+
+TECHNICAL_PROXY_MAP: Dict[str, Dict[str, str]] = {
+    "GC": {
+        "analysis_symbol": "XAUUSD",
+        "relationship": "COMEX continuous gold futures proxy; not the same contract as MT5 spot gold",
+    },
+    "ES": {
+        "analysis_symbol": "SP500",
+        "relationship": "CME E-mini S&P 500 continuous futures proxy",
+    },
+    "NQ": {
+        "analysis_symbol": "NASDAQ100",
+        "relationship": "CME E-mini Nasdaq-100 continuous futures proxy",
+    },
+    "YM": {
+        "analysis_symbol": "DOW30",
+        "relationship": "CBOT E-mini Dow continuous futures proxy",
+    },
+}
 
 # 默认批量品种。某品种因行情权限/合约不可用失败时，只跳过该品种。
 DEFAULT_SYMBOLS = [
@@ -799,6 +819,8 @@ def evaluate_location(
     std20 = safe_float(row.get("STD20"))
     rvol = safe_float(row.get("RVOL20"))
 
+    completed_price = safe_float(row.get("Close"))
+    z_completed = (completed_price - sma20) / std20 if math.isfinite(std20) and std20 > 0 else np.nan
     z_now = (current_price - sma20) / std20 if math.isfinite(std20) and std20 > 0 else np.nan
     ema20_atr_now = (current_price - ema20) / atr if math.isfinite(atr) and atr > 0 else np.nan
     ema50_atr_now = (current_price - ema50) / atr if math.isfinite(atr) and atr > 0 else np.nan
@@ -855,12 +877,10 @@ def evaluate_location(
             if trend == "BULLISH": score += 10
             elif trend == "BEARISH": score -= 10
             if "HL" in structure: score += 10
-            if no_chase_long: score -= 20
         else:
             if trend == "BEARISH": score += 10
             elif trend == "BULLISH": score -= 10
             if "LH" in structure: score += 10
-            if no_chase_short: score -= 20
 
         rejection = _rejection_signal(df, level, atr, direction)
         if rejection:
@@ -890,23 +910,20 @@ def evaluate_location(
     direction = best["direction"]
     dist = best["distance_atr"]
     score = best["score"]
-    no_chase = no_chase_long if direction == "LONG" else no_chase_short
-
     status = "NO_SETUP"
     level_no = 0
-    if score >= 45 and dist <= 0.50 and not no_chase:
+    if score >= 45 and dist <= 0.50:
         status = f"WATCH_{direction}"
         level_no = 1
-    if score >= 65 and dist <= 0.30 and not no_chase:
+    if score >= 65 and dist <= 0.30:
         status = f"SETUP_READY_{direction}"
         level_no = 2
-    if score >= 75 and dist <= 0.30 and best["rejection"] and not no_chase:
+    if score >= 75 and dist <= 0.30 and best["rejection"]:
         status = f"CONFIRMED_{direction}"
         level_no = 3
 
     if other["score"] >= 55 and abs(best["score"] - other["score"]) < 10:
         status = "CONFLICT_WATCH"
-        level_no = 1
         direction = "NEUTRAL"
 
     return {
@@ -915,7 +932,8 @@ def evaluate_location(
         "candidate_direction": direction,
         "location_score": int(score),
         "analysis_required": bool(level_no >= 2),
-        "price_z20_now": safe_float(z_now),
+        "price_z20_completed": safe_float(z_completed),
+        "price_z20_snapshot": safe_float(z_now),
         "ema20_atr_distance_now": safe_float(ema20_atr_now),
         "ema50_atr_distance_now": safe_float(ema50_atr_now),
         "no_chase_long": no_chase_long,
@@ -923,6 +941,39 @@ def evaluate_location(
         "rvol20": safe_float(rvol),
         "long": long_side,
         "short": short_side,
+    }
+
+
+def build_technical_klines(
+    symbol: str,
+    df: pd.DataFrame,
+    completed_h1_utc: str,
+) -> Dict[str, Any]:
+    """Serialize the bounded completed-H1 verification window required by v6."""
+    volume_status = "TRADES" if has_meaningful_volume(df) else "UNAVAILABLE_OR_PROXY"
+    bars: List[Dict[str, Any]] = []
+    for timestamp, row in df.iloc[-SHOW_LAST_N:].iterrows():
+        bars.append(
+            {
+                "time_utc": beijing_naive_to_utc_iso(pd.Timestamp(timestamp)),
+                "open": safe_float(row.get("Open")),
+                "high": safe_float(row.get("High")),
+                "low": safe_float(row.get("Low")),
+                "close": safe_float(row.get("Close")),
+                "volume": safe_float(row.get("Volume")),
+                "volume_status": volume_status,
+            }
+        )
+    proxy = TECHNICAL_PROXY_MAP.get(symbol, {})
+    return {
+        "symbol": symbol,
+        "analysis_symbol": proxy.get("analysis_symbol", symbol),
+        "instrument_relationship": proxy.get("relationship", "same symbol"),
+        "timeframe": TIMEFRAME_LABEL,
+        "completed_h1_utc": completed_h1_utc,
+        "source": "IBKR",
+        "volume_status": volume_status,
+        "bars": bars,
     }
 
 
@@ -1159,7 +1210,7 @@ def draw_chart(
     div_text = divergence[0] if divergence else "NONE"
     hvn_text = "\n        ".join(fmt_price(float(v), dec) for v in profile.get("HVN", []) or []) or "N/A"
     lvn_text = "\n        ".join(fmt_price(float(v), dec) for v in profile.get("LVN", []) or []) or "N/A"
-    z_text = "N/A" if not math.isfinite(location["price_z20_now"]) else f"{location['price_z20_now']:+.2f}"
+    z_text = "N/A" if not math.isfinite(location["price_z20_snapshot"]) else f"{location['price_z20_snapshot']:+.2f}"
     e20_text = "N/A" if not math.isfinite(location["ema20_atr_distance_now"]) else f"{location['ema20_atr_distance_now']:+.2f} ATR"
     rvol_text = "N/A" if not math.isfinite(location["rvol20"]) else f"{location['rvol20']:.2f}x"
     decision_side = location["long"] if location["candidate_direction"] == "LONG" else location["short"]
@@ -1237,6 +1288,11 @@ def draw_chart(
 
     trigger = {
         "symbol": symbol,
+        "analysis_symbol": TECHNICAL_PROXY_MAP.get(symbol, {}).get("analysis_symbol", symbol),
+        "instrument_relationship": TECHNICAL_PROXY_MAP.get(symbol, {}).get("relationship", "same symbol"),
+        "status": "ok",
+        "error": None,
+        "automated_trading": False,
         "timeframe": TIMEFRAME_LABEL,
         "timestamp_utc": generated_utc,
         "completed_h1_utc": completed_h1_utc,
@@ -1248,6 +1304,8 @@ def draw_chart(
         "atr14": atr_now,
         "profile": {
             "mode": profile["Mode"],
+            "approximation": "h1_typical_price",
+            "bins": PROFILE_BINS,
             "window_h1": int(profile.get("WindowBars", 0)),
             "poc": safe_float(profile["POC"]),
             "vah": safe_float(profile["VAH"]),
@@ -1256,7 +1314,9 @@ def draw_chart(
             "lvn": [float(v) for v in profile.get("LVN", []) or []],
         },
         "extension": {
-            "price_z20": location["price_z20_now"],
+            "price_z20": location["price_z20_completed"],
+            "price_z20_completed": location["price_z20_completed"],
+            "price_z20_snapshot": location["price_z20_snapshot"],
             "ema20_atr_distance": location["ema20_atr_distance_now"],
             "ema50_atr_distance": location["ema50_atr_distance_now"],
             "no_chase_long": location["no_chase_long"],
@@ -1269,18 +1329,18 @@ def draw_chart(
             "candidate_direction": location["candidate_direction"],
             "score": location["location_score"],
             "analysis_required": location["analysis_required"],
-            "nearest_level": zone_side.get("level"),
-            "distance_atr": zone_side.get("distance_atr"),
-            "touches": zone_side.get("touches"),
-            "profile_feature": zone_side.get("profile_feature"),
-            "profile_distance_atr": zone_side.get("profile_distance_atr"),
-            "ema_confluence": zone_side.get("ema_confluence", []),
-            "rejection": zone_side.get("rejection", False),
+            "best_side_level": zone_side.get("level"),
+            "best_side_distance_atr": zone_side.get("distance_atr"),
+            "best_side_touches": zone_side.get("touches"),
+            "best_side_profile_feature": zone_side.get("profile_feature"),
+            "best_side_profile_distance_atr": zone_side.get("profile_distance_atr"),
+            "best_side_ema_confluence": zone_side.get("ema_confluence", []),
+            "best_side_rejection": zone_side.get("rejection", False),
             "long": location["long"],
             "short": location["short"],
         },
         "divergence": divergence[0] if divergence else None,
-        "chart": str(output_path),
+        "chart": output_path.name,
     }
 
     return {
@@ -1292,7 +1352,7 @@ def draw_chart(
         "Trend": trend,
         "Structure": structure,
         "ATR14": atr_now,
-        "Z20": location["price_z20_now"],
+        "Z20": location["price_z20_completed"],
         "EMA20ATRDist": location["ema20_atr_distance_now"],
         "RVOL20": location["rvol20"],
         "ProfileMode": profile["Mode"],
@@ -1312,6 +1372,7 @@ def draw_chart(
         "Bars": len(df),
         "Chart": str(output_path),
         "Trigger": trigger,
+        "TechnicalKlines": build_technical_klines(symbol, df, completed_h1_utc),
     }
 
 
@@ -1354,7 +1415,7 @@ def write_json_file(path: Path, payload: Any) -> None:
 def _alert_zone_key(trigger: Dict[str, Any]) -> str:
     loc = trigger.get("location", {})
     direction = str(loc.get("candidate_direction", "NEUTRAL"))
-    level = safe_float(loc.get("nearest_level"))
+    level = safe_float(loc.get("best_side_level"))
     atr = safe_float(trigger.get("atr14"))
     if math.isfinite(level) and math.isfinite(atr) and atr > 0:
         # 用 0.10 ATR 量化，避免 SR 聚类每次轻微漂移导致重复通知。
@@ -1403,7 +1464,7 @@ def build_alert_state(trigger: Dict[str, Any], sent: bool) -> Dict[str, Any]:
         "setup_status": loc.get("setup_status", "NO_SETUP"),
         "alert_level": int(loc.get("alert_level") or 0),
         "candidate_direction": loc.get("candidate_direction", "NEUTRAL"),
-        "nearest_level": loc.get("nearest_level"),
+        "best_side_level": loc.get("best_side_level"),
         "zone_key": _alert_zone_key(trigger),
         "completed_h1_utc": trigger.get("completed_h1_utc"),
         "updated_at_utc": pd.Timestamp.now(tz="UTC").isoformat().replace("+00:00", "Z"),
@@ -1436,8 +1497,8 @@ def format_wework_markdown(triggers: List[Dict[str, Any]]) -> str:
             f"> **{t.get('symbol')} | L{level} {level_name} | {direction_cn}**",
             f"> Price `{_fmt_num(t.get('price'), 2)}` | Score `{score}/100` | `{status}`",
             f"> H1 `{t.get('trend')}` / `{t.get('structure')}` | ATR `{_fmt_num(t.get('atr14'), 2)}`",
-            f"> Key `{_fmt_num(loc.get('nearest_level'), 2)}` | distance `{_fmt_num(loc.get('distance_atr'), 2, ' ATR')}` | touches `{loc.get('touches', 0)}`",
-            f"> Profile `{profile.get('mode')}` / `{loc.get('profile_feature')}` | overlap `{_fmt_num(loc.get('profile_distance_atr'), 2, ' ATR')}`",
+            f"> Key `{_fmt_num(loc.get('best_side_level'), 2)}` | distance `{_fmt_num(loc.get('best_side_distance_atr'), 2, ' ATR')}` | touches `{loc.get('best_side_touches', 0)}`",
+            f"> Profile `{profile.get('mode')}` / `{loc.get('best_side_profile_feature')}` | overlap `{_fmt_num(loc.get('best_side_profile_distance_atr'), 2, ' ATR')}`",
             f"> Z20 `{_fmt_num(ext.get('price_z20'), 2)}` | EMA20 `{_fmt_num(ext.get('ema20_atr_distance'), 2, ' ATR')}` | RVOL `{_fmt_num(ext.get('rvol20'), 2, 'x')}`",
         ])
         if loc.get("analysis_required"):
@@ -1545,6 +1606,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--notify-clear", action="store_true", help="位置预警解除时也发送一条 CLEAR 通知")
     p.add_argument("--state-file", default="", help="预警去重状态文件；默认 <output-dir>/alert_state.json")
     p.add_argument("--trigger-file", default="", help="技术触发 JSON；默认 <output-dir>/technical_triggers.json")
+    p.add_argument(
+        "--repo-root",
+        default=os.environ.get("MT5_GPT_DATA_REPO", ""),
+        help="可选 mt5-gpt-data 根目录；写入 runtime/technical_gate 与 latest 技术文件",
+    )
     return p
 
 
@@ -1641,11 +1707,28 @@ def main() -> int:
 
     generated_utc = pd.Timestamp.now(tz="UTC").isoformat().replace("+00:00", "Z")
     triggers = [s["Trigger"] for s in summaries]
+    for symbol, message in failures:
+        proxy = TECHNICAL_PROXY_MAP.get(symbol, {})
+        triggers.append(
+            {
+                "symbol": symbol,
+                "analysis_symbol": proxy.get("analysis_symbol", symbol),
+                "instrument_relationship": proxy.get("relationship", "same symbol"),
+                "status": "error",
+                "error": message,
+                "automated_trading": False,
+                "timeframe": TIMEFRAME_LABEL,
+                "timestamp_utc": generated_utc,
+            }
+        )
     trigger_payload = {
-        "schema_version": "2.0",
+        "schema": "technical_triggers.v2.1",
+        "schema_version": "2.1",
         "generated_at_utc": generated_utc,
         "source": "IBKR",
         "timeframe": TIMEFRAME_LABEL,
+        "one_shot": True,
+        "automated_trading": False,
         "policy": {
             "completed_h1_only_for_structure": True,
             "snapshot_for_proximity_only": True,
@@ -1654,10 +1737,35 @@ def main() -> int:
             "confirmed_level": 3,
             "wework_env": WEWORK_WEBHOOK_ENV,
         },
-        "symbols": triggers,
+        "triggers": triggers,
     }
     write_json_file(trigger_path, trigger_payload)
     print(f"\n[TRIGGER] {trigger_path}")
+
+    klines_payload = {
+        "schema": "technical_klines.v1",
+        "generated_at_utc": generated_utc,
+        "source": "IBKR",
+        "timeframe": TIMEFRAME_LABEL,
+        "symbols": [s["TechnicalKlines"] for s in summaries],
+    }
+    klines_path = out_dir / KLINES_FILE_NAME
+    write_json_file(klines_path, klines_payload)
+    print(f"[KLINES] {klines_path}")
+
+    if args.repo_root:
+        repo_root = Path(args.repo_root).resolve()
+        if not (repo_root / ".git").exists():
+            print(f"[FATAL] --repo-root 不是 Git 仓库: {repo_root}", file=sys.stderr)
+            return 2
+        repo_outputs = (
+            (repo_root / "runtime" / "technical_gate" / "technical_triggers.json", trigger_payload),
+            (repo_root / "latest" / "technical_gate.json", trigger_payload),
+            (repo_root / "latest" / "technical_klines.json", klines_payload),
+        )
+        for repo_path, payload in repo_outputs:
+            write_json_file(repo_path, payload)
+            print(f"[REPO] {repo_path}")
 
     if summaries:
         summary_path = out_dir / "summary.csv"

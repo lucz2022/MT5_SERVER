@@ -15,6 +15,11 @@
       "code": "NQ",
       "name": "纳斯达克100 E-mini",
       "enabled": true
+    },
+    {
+      "code": "YM",
+      "name": "道琼斯 E-mini",
+      "enabled": true
     }
   ]
 }

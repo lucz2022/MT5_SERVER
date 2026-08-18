@@ -1,8 +1,11 @@
 {
-  "schema_version": "2.0",
-  "generated_at_utc": "2026-08-18T10:25:13.495243Z",
+  "schema": "technical_triggers.v2.1",
+  "schema_version": "2.1",
+  "generated_at_utc": "2026-08-18T13:21:30.032244Z",
   "source": "IBKR",
   "timeframe": "1H",
+  "one_shot": true,
+  "automated_trading": false,
   "policy": {
     "completed_h1_only_for_structure": true,
     "snapshot_for_proximity_only": true,
@@ -11,28 +14,35 @@
     "confirmed_level": 3,
     "wework_env": "WEWORK_WEBHOOK_URL"
   },
-  "symbols": [
+  "triggers": [
     {
       "symbol": "GC",
+      "analysis_symbol": "XAUUSD",
+      "instrument_relationship": "COMEX continuous gold futures proxy; not the same contract as MT5 spot gold",
+      "status": "ok",
+      "error": null,
+      "automated_trading": false,
       "timeframe": "1H",
-      "timestamp_utc": "2026-08-18T10:25:13.344204Z",
-      "completed_h1_utc": "2026-08-18T09:00:00Z",
-      "beijing_time": "2026-08-18 17:00",
-      "price": 4416.7,
+      "timestamp_utc": "2026-08-18T13:21:08.878361Z",
+      "completed_h1_utc": "2026-08-18T12:00:00Z",
+      "beijing_time": "2026-08-18 20:00",
+      "price": 4418.1,
       "price_source": "completed H1 close",
       "trend": "MIXED",
       "structure": "HH/HL",
-      "atr14": 12.928571428571558,
+      "atr14": 12.585714285714337,
       "profile": {
         "mode": "VP",
+        "approximation": "h1_typical_price",
+        "bins": 42,
         "window_h1": 120,
-        "poc": 4409.945238095239,
+        "poc": 4418.330952380953,
         "vah": 4442.090476190476,
         "val": 4391.776190476191,
         "hvn": [
-          4412.740476190476,
-          4395.969047619048,
-          4443.488095238095
+          4415.535714285714,
+          4421.1261904761905,
+          4401.559523809524
         ],
         "lvn": [
           4354.0404761904765,
@@ -41,53 +51,317 @@
         ]
       },
       "extension": {
-        "price_z20": -1.1091671199819002,
-        "ema20_atr_distance": -0.5706097860557032,
-        "ema50_atr_distance": -0.10453155391140327,
+        "price_z20": -0.7891761358399284,
+        "price_z20_completed": -0.7891761358399284,
+        "price_z20_snapshot": -0.7891761358399284,
+        "ema20_atr_distance": -0.3805268763327576,
+        "ema50_atr_distance": -0.009685966954879506,
         "no_chase_long": false,
         "no_chase_short": false,
-        "rvol20": 0.2967799376762131
+        "rvol20": 0.7941119504164247
+      },
+      "location": {
+        "setup_status": "WATCH_SHORT",
+        "alert_level": 1,
+        "candidate_direction": "SHORT",
+        "score": 55,
+        "analysis_required": false,
+        "best_side_level": 4420.8,
+        "best_side_distance_atr": 0.21452894438136946,
+        "best_side_touches": 1,
+        "best_side_profile_feature": "HVN",
+        "best_side_profile_distance_atr": 0.02591751797198558,
+        "best_side_ema_confluence": [
+          "EMA20"
+        ],
+        "best_side_rejection": false,
+        "long": {
+          "direction": "LONG",
+          "score": 20,
+          "level": 4408.0,
+          "touches": 2,
+          "distance_atr": 0.8024971623155761,
+          "profile_feature": "HVN",
+          "profile_price": 4401.559523809524,
+          "profile_distance_atr": 0.5117290957245499,
+          "ema_confluence": [],
+          "rejection": false
+        },
+        "short": {
+          "direction": "SHORT",
+          "score": 55,
+          "level": 4420.8,
+          "touches": 1,
+          "distance_atr": 0.21452894438136946,
+          "profile_feature": "HVN",
+          "profile_price": 4421.1261904761905,
+          "profile_distance_atr": 0.02591751797198558,
+          "ema_confluence": [
+            "EMA20"
+          ],
+          "rejection": false
+        }
+      },
+      "divergence": "BEARISH DIVERGENCE",
+      "chart": "GC_1H.png"
+    },
+    {
+      "symbol": "ES",
+      "analysis_symbol": "SP500",
+      "instrument_relationship": "CME E-mini S&P 500 continuous futures proxy",
+      "status": "ok",
+      "error": null,
+      "automated_trading": false,
+      "timeframe": "1H",
+      "timestamp_utc": "2026-08-18T13:21:16.109689Z",
+      "completed_h1_utc": "2026-08-18T12:00:00Z",
+      "beijing_time": "2026-08-18 20:00",
+      "price": 7735.75,
+      "price_source": "completed H1 close",
+      "trend": "BEARISH",
+      "structure": "LH/LL",
+      "atr14": 10.392857142857142,
+      "profile": {
+        "mode": "VP",
+        "approximation": "h1_typical_price",
+        "bins": 42,
+        "window_h1": 120,
+        "poc": 7771.258928571429,
+        "vah": 7806.732142857143,
+        "val": 7726.0,
+        "hvn": [
+          7773.705357142857,
+          7768.8125,
+          7805.508928571429
+        ],
+        "lvn": [
+          7741.901785714286,
+          7732.116071428571,
+          7756.580357142857
+        ]
+      },
+      "extension": {
+        "price_z20": -0.871268173289629,
+        "price_z20_completed": -0.871268173289629,
+        "price_z20_snapshot": -0.871268173289629,
+        "ema20_atr_distance": -1.5351319287112652,
+        "ema50_atr_distance": -3.7038477141849246,
+        "no_chase_long": false,
+        "no_chase_short": true,
+        "rvol20": 0.6478131650124422
+      },
+      "location": {
+        "setup_status": "WATCH_SHORT",
+        "alert_level": 1,
+        "candidate_direction": "SHORT",
+        "score": 45,
+        "analysis_required": false,
+        "best_side_level": 7738.0,
+        "best_side_distance_atr": 0.21649484536082475,
+        "best_side_touches": 1,
+        "best_side_profile_feature": "LVN",
+        "best_side_profile_distance_atr": 0.3754295532646548,
+        "best_side_ema_confluence": [],
+        "best_side_rejection": false,
+        "long": {
+          "direction": "LONG",
+          "score": 8,
+          "level": 7724.883940182055,
+          "touches": 2,
+          "distance_atr": 1.045531528874425,
+          "profile_feature": "VAL",
+          "profile_price": 7726.0,
+          "profile_distance_atr": 0.10738719897751763,
+          "ema_confluence": [],
+          "rejection": false
+        },
+        "short": {
+          "direction": "SHORT",
+          "score": 45,
+          "level": 7738.0,
+          "touches": 1,
+          "distance_atr": 0.21649484536082475,
+          "profile_feature": "LVN",
+          "profile_price": 7741.901785714286,
+          "profile_distance_atr": 0.3754295532646548,
+          "ema_confluence": [],
+          "rejection": false
+        }
+      },
+      "divergence": null,
+      "chart": "ES_1H.png"
+    },
+    {
+      "symbol": "NQ",
+      "analysis_symbol": "NASDAQ100",
+      "instrument_relationship": "CME E-mini Nasdaq-100 continuous futures proxy",
+      "status": "ok",
+      "error": null,
+      "automated_trading": false,
+      "timeframe": "1H",
+      "timestamp_utc": "2026-08-18T13:21:23.175364Z",
+      "completed_h1_utc": "2026-08-18T12:00:00Z",
+      "beijing_time": "2026-08-18 20:00",
+      "price": 29713.0,
+      "price_source": "completed H1 close",
+      "trend": "BEARISH",
+      "structure": "HH/LL",
+      "atr14": 80.55357142857143,
+      "profile": {
+        "mode": "VP",
+        "approximation": "h1_typical_price",
+        "bins": 42,
+        "window_h1": 120,
+        "poc": 30216.0873015873,
+        "vah": 30259.38095238095,
+        "val": 29861.079365079364,
+        "hvn": [
+          30233.404761904763,
+          30094.86507936508,
+          29869.73809523809
+        ],
+        "lvn": [
+          30025.595238095237,
+          30042.9126984127,
+          29800.468253968254
+        ]
+      },
+      "extension": {
+        "price_z20": -1.4907625012863583,
+        "price_z20_completed": -1.4907625012863583,
+        "price_z20_snapshot": -1.4907625012863583,
+        "ema20_atr_distance": -2.4612555807916885,
+        "ema50_atr_distance": -3.839269397208003,
+        "no_chase_long": false,
+        "no_chase_short": true,
+        "rvol20": 0.9010622951763237
       },
       "location": {
         "setup_status": "NO_SETUP",
         "alert_level": 0,
-        "candidate_direction": "LONG",
+        "candidate_direction": "SHORT",
         "score": 40,
         "analysis_required": false,
-        "nearest_level": 4408.0,
-        "distance_atr": 0.6729281767955593,
-        "touches": 1,
-        "profile_feature": "POC",
-        "profile_distance_atr": 0.1504604051565979,
-        "ema_confluence": [],
-        "rejection": true,
+        "best_side_level": 29718.75,
+        "best_side_distance_atr": 0.07138106849922411,
+        "best_side_touches": 1,
+        "best_side_profile_feature": "LVN",
+        "best_side_profile_distance_atr": 1.014458484199124,
+        "best_side_ema_confluence": [],
+        "best_side_rejection": false,
         "long": {
           "direction": "LONG",
+          "score": 12,
+          "level": 29675.449999999997,
+          "touches": 2,
+          "distance_atr": 0.4661494125471432,
+          "profile_feature": "LVN",
+          "profile_price": 29800.468253968254,
+          "profile_distance_atr": 1.5519889652454912,
+          "ema_confluence": [],
+          "rejection": false
+        },
+        "short": {
+          "direction": "SHORT",
           "score": 40,
-          "level": 4408.0,
+          "level": 29718.75,
           "touches": 1,
-          "distance_atr": 0.6729281767955593,
-          "profile_feature": "POC",
-          "profile_price": 4409.945238095239,
-          "profile_distance_atr": 0.1504604051565979,
+          "distance_atr": 0.07138106849922411,
+          "profile_feature": "LVN",
+          "profile_price": 29800.468253968254,
+          "profile_distance_atr": 1.014458484199124,
+          "ema_confluence": [],
+          "rejection": false
+        }
+      },
+      "divergence": null,
+      "chart": "NQ_1H.png"
+    },
+    {
+      "symbol": "YM",
+      "analysis_symbol": "DOW30",
+      "instrument_relationship": "CBOT E-mini Dow continuous futures proxy",
+      "status": "ok",
+      "error": null,
+      "automated_trading": false,
+      "timeframe": "1H",
+      "timestamp_utc": "2026-08-18T13:21:29.848758Z",
+      "completed_h1_utc": "2026-08-18T12:00:00Z",
+      "beijing_time": "2026-08-18 20:00",
+      "price": 53507.0,
+      "price_source": "completed H1 close",
+      "trend": "BEARISH",
+      "structure": "LH/LL",
+      "atr14": 66.14285714285714,
+      "profile": {
+        "mode": "VP",
+        "approximation": "h1_typical_price",
+        "bins": 42,
+        "window_h1": 120,
+        "poc": 53885.99206349206,
+        "vah": 54067.09523809524,
+        "val": 53628.63492063492,
+        "hvn": [
+          53905.055555555555,
+          53828.80158730158,
+          54019.43650793651
+        ],
+        "lvn": [
+          53676.293650793654,
+          53695.357142857145,
+          54095.69047619047
+        ]
+      },
+      "extension": {
+        "price_z20": -0.07785157753250709,
+        "price_z20_completed": -0.07785157753250709,
+        "price_z20_snapshot": -0.07785157753250709,
+        "ema20_atr_distance": -0.36850091156451503,
+        "ema50_atr_distance": -1.9682936163514784,
+        "no_chase_long": false,
+        "no_chase_short": false,
+        "rvol20": 0.9446031548875916
+      },
+      "location": {
+        "setup_status": "NO_SETUP",
+        "alert_level": 0,
+        "candidate_direction": "SHORT",
+        "score": 25,
+        "analysis_required": false,
+        "best_side_level": 53558.0,
+        "best_side_distance_atr": 0.7710583153347733,
+        "best_side_touches": 1,
+        "best_side_profile_feature": "VAL",
+        "best_side_profile_distance_atr": 1.0679145668346237,
+        "best_side_ema_confluence": [],
+        "best_side_rejection": false,
+        "long": {
+          "direction": "LONG",
+          "score": 23,
+          "level": 53491.0,
+          "touches": 1,
+          "distance_atr": 0.24190064794816415,
+          "profile_feature": "VAL",
+          "profile_price": 53628.63492063492,
+          "profile_distance_atr": 2.080873530117561,
           "ema_confluence": [],
           "rejection": true
         },
         "short": {
           "direction": "SHORT",
-          "score": 17,
-          "level": 4420.8,
+          "score": 25,
+          "level": 53558.0,
           "touches": 1,
-          "distance_atr": 0.31712707182322936,
-          "profile_feature": "HVN",
-          "profile_price": 4412.740476190476,
-          "profile_distance_atr": 0.623388581952115,
+          "distance_atr": 0.7710583153347733,
+          "profile_feature": "VAL",
+          "profile_price": 53628.63492063492,
+          "profile_distance_atr": 1.0679145668346237,
           "ema_confluence": [],
           "rejection": false
         }
       },
-      "divergence": "BEARISH DIVERGENCE",
-      "chart": "C:\\Users\\Administrator\\Documents\\ChatGPT\\MT5_SERVER\\ibkr_technical_output\\GC_1H.png"
+      "divergence": "BULLISH DIVERGENCE",
+      "chart": "YM_1H.png"
     }
   ]
 }
