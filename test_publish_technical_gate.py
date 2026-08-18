@@ -7,6 +7,7 @@ from unittest.mock import patch
 from publish_technical_gate import (
     PUBLISH_PATHS,
     assert_clean,
+    notify_publisher_status,
     publication_reasons,
     push_with_rebase,
     update_failure_counts,
@@ -91,6 +92,19 @@ class TechnicalGatePublisherTests(unittest.TestCase):
             cwd=Path("repo"),
             check=False,
         )
+
+    @patch.dict(
+        "os.environ",
+        {"WEWORK_WEBHOOK_URL": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"},
+        clear=True,
+    )
+    @patch("publish_technical_gate.urllib.request.urlopen")
+    def test_publisher_notification_uses_producer_webhook_name(self, mocked_urlopen):
+        response = mocked_urlopen.return_value.__enter__.return_value
+        response.read.return_value = b'{"errcode":0,"errmsg":"ok"}'
+        notify_publisher_status("test")
+        request = mocked_urlopen.call_args.args[0]
+        self.assertIn("qyapi.weixin.qq.com", request.full_url)
 
 
 if __name__ == "__main__":

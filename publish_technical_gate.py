@@ -165,9 +165,15 @@ def push_with_rebase(repo: Path, *, attempts: int = 3) -> None:
 def notify_publisher_status(message: str, *, enabled: bool = True) -> None:
     if not enabled:
         return
-    webhook = os.getenv("WE_COM_WEBHOOK_URL", "").strip()
+    webhook = (
+        os.getenv("WEWORK_WEBHOOK_URL", "").strip()
+        or os.getenv("WE_COM_WEBHOOK_URL", "").strip()
+    )
     if not webhook:
-        print("[WEWORK] WE_COM_WEBHOOK_URL not set; publisher status notification skipped")
+        print(
+            "[WEWORK] WEWORK_WEBHOOK_URL/WE_COM_WEBHOOK_URL not set; "
+            "publisher status notification skipped"
+        )
         return
     payload = json.dumps(
         {"msgtype": "markdown", "markdown": {"content": message}},
