@@ -1,8 +1,15 @@
 {
   "schema": "technical_klines.v1",
-  "generated_at_utc": "2026-08-18T13:21:30.032244Z",
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-08-18T13:26:56.570682Z",
   "source": "IBKR",
   "timeframe": "1H",
+  "status": "ok",
+  "automated_trading": false,
+  "symbol_count": 4,
+  "success_count": 4,
+  "failure_count": 0,
+  "common_completed_h1_utc": "2026-08-18T12:00:00Z",
   "symbols": [
     {
       "symbol": "GC",
@@ -12,6 +19,11 @@
       "completed_h1_utc": "2026-08-18T12:00:00Z",
       "source": "IBKR",
       "volume_status": "TRADES",
+      "status": "ok",
+      "error": null,
+      "bar_count": 280,
+      "window_start_utc": "2026-07-31T09:00:00Z",
+      "window_end_utc": "2026-08-18T12:00:00Z",
       "bars": [
         {
           "time_utc": "2026-07-31T09:00:00Z",
@@ -2543,6 +2555,11 @@
       "completed_h1_utc": "2026-08-18T12:00:00Z",
       "source": "IBKR",
       "volume_status": "TRADES",
+      "status": "ok",
+      "error": null,
+      "bar_count": 280,
+      "window_start_utc": "2026-07-31T09:00:00Z",
+      "window_end_utc": "2026-08-18T12:00:00Z",
       "bars": [
         {
           "time_utc": "2026-07-31T09:00:00Z",
@@ -5074,6 +5091,11 @@
       "completed_h1_utc": "2026-08-18T12:00:00Z",
       "source": "IBKR",
       "volume_status": "TRADES",
+      "status": "ok",
+      "error": null,
+      "bar_count": 280,
+      "window_start_utc": "2026-07-31T09:00:00Z",
+      "window_end_utc": "2026-08-18T12:00:00Z",
       "bars": [
         {
           "time_utc": "2026-07-31T09:00:00Z",
@@ -7605,6 +7627,11 @@
       "completed_h1_utc": "2026-08-18T12:00:00Z",
       "source": "IBKR",
       "volume_status": "TRADES",
+      "status": "ok",
+      "error": null,
+      "bar_count": 280,
+      "window_start_utc": "2026-07-31T09:00:00Z",
+      "window_end_utc": "2026-08-18T12:00:00Z",
       "bars": [
         {
           "time_utc": "2026-07-31T09:00:00Z",

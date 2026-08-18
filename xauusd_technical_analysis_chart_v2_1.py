@@ -822,6 +822,8 @@ def evaluate_location(
     completed_price = safe_float(row.get("Close"))
     z_completed = (completed_price - sma20) / std20 if math.isfinite(std20) and std20 > 0 else np.nan
     z_now = (current_price - sma20) / std20 if math.isfinite(std20) and std20 > 0 else np.nan
+    ema20_atr_completed = (completed_price - ema20) / atr if math.isfinite(atr) and atr > 0 else np.nan
+    ema50_atr_completed = (completed_price - ema50) / atr if math.isfinite(atr) and atr > 0 else np.nan
     ema20_atr_now = (current_price - ema20) / atr if math.isfinite(atr) and atr > 0 else np.nan
     ema50_atr_now = (current_price - ema50) / atr if math.isfinite(atr) and atr > 0 else np.nan
     no_chase_long = bool((math.isfinite(z_now) and z_now > 2.0) or (math.isfinite(ema20_atr_now) and ema20_atr_now > 1.5))
@@ -934,6 +936,8 @@ def evaluate_location(
         "analysis_required": bool(level_no >= 2),
         "price_z20_completed": safe_float(z_completed),
         "price_z20_snapshot": safe_float(z_now),
+        "ema20_atr_distance_completed": safe_float(ema20_atr_completed),
+        "ema50_atr_distance_completed": safe_float(ema50_atr_completed),
         "ema20_atr_distance_now": safe_float(ema20_atr_now),
         "ema50_atr_distance_now": safe_float(ema50_atr_now),
         "no_chase_long": no_chase_long,
@@ -973,6 +977,11 @@ def build_technical_klines(
         "completed_h1_utc": completed_h1_utc,
         "source": "IBKR",
         "volume_status": volume_status,
+        "status": "ok",
+        "error": None,
+        "bar_count": len(bars),
+        "window_start_utc": bars[0]["time_utc"] if bars else None,
+        "window_end_utc": bars[-1]["time_utc"] if bars else None,
         "bars": bars,
     }
 
@@ -1292,6 +1301,7 @@ def draw_chart(
         "instrument_relationship": TECHNICAL_PROXY_MAP.get(symbol, {}).get("relationship", "same symbol"),
         "status": "ok",
         "error": None,
+        "source": "IBKR",
         "automated_trading": False,
         "timeframe": TIMEFRAME_LABEL,
         "timestamp_utc": generated_utc,
@@ -1299,6 +1309,8 @@ def draw_chart(
         "beijing_time": latest_time.strftime("%Y-%m-%d %H:%M"),
         "price": current_price,
         "price_source": price_source,
+        "snapshot_available": bool(snapshot_price and snapshot_price > 0),
+        "snapshot_price": safe_float(snapshot_price),
         "trend": trend,
         "structure": structure,
         "atr14": atr_now,
@@ -1317,6 +1329,10 @@ def draw_chart(
             "price_z20": location["price_z20_completed"],
             "price_z20_completed": location["price_z20_completed"],
             "price_z20_snapshot": location["price_z20_snapshot"],
+            "ema20_atr_distance_completed": location["ema20_atr_distance_completed"],
+            "ema20_atr_distance_snapshot": location["ema20_atr_distance_now"],
+            "ema50_atr_distance_completed": location["ema50_atr_distance_completed"],
+            "ema50_atr_distance_snapshot": location["ema50_atr_distance_now"],
             "ema20_atr_distance": location["ema20_atr_distance_now"],
             "ema50_atr_distance": location["ema50_atr_distance_now"],
             "no_chase_long": location["no_chase_long"],
@@ -1329,6 +1345,7 @@ def draw_chart(
             "candidate_direction": location["candidate_direction"],
             "score": location["location_score"],
             "analysis_required": location["analysis_required"],
+            "best_side_direction": zone_side.get("direction"),
             "best_side_level": zone_side.get("level"),
             "best_side_distance_atr": zone_side.get("distance_atr"),
             "best_side_touches": zone_side.get("touches"),
@@ -1410,6 +1427,33 @@ def write_json_file(path: Path, payload: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(json_safe(payload), ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def ensure_analysis_input_technical_contract(path: Path) -> bool:
+    """Persist Gate detail paths without reformatting the generated compact bundle."""
+    payload = load_json_file(path, None)
+    if not isinstance(payload, dict):
+        return False
+    contract = payload.setdefault("data_contract", {})
+    if not isinstance(contract, dict):
+        return False
+    details = contract.setdefault("detail_files", {})
+    if not isinstance(details, dict):
+        return False
+    expected = {
+        "technical_gate": "runtime/technical_gate/technical_triggers.json",
+        "technical_klines": "latest/technical_klines.json",
+    }
+    if all(details.get(key) == value for key, value in expected.items()):
+        return False
+    details.update(expected)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(json_safe(payload), ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+    return True
 
 
 def _alert_zone_key(trigger: Dict[str, Any]) -> str:
@@ -1739,14 +1783,37 @@ def main() -> int:
         },
         "triggers": triggers,
     }
+    success_count = sum(str(item.get("status") or "").casefold() == "ok" for item in triggers)
+    failure_count = len(triggers) - success_count
+    completed_times = {
+        str(item.get("completed_h1_utc"))
+        for item in triggers
+        if item.get("status") == "ok" and item.get("completed_h1_utc")
+    }
+    trigger_payload.update(
+        {
+            "status": "ok" if success_count and not failure_count else "partial" if success_count else "error",
+            "symbol_count": len(triggers),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "common_completed_h1_utc": next(iter(completed_times)) if len(completed_times) == 1 else None,
+        }
+    )
     write_json_file(trigger_path, trigger_payload)
     print(f"\n[TRIGGER] {trigger_path}")
 
     klines_payload = {
         "schema": "technical_klines.v1",
+        "schema_version": "1.0",
         "generated_at_utc": generated_utc,
         "source": "IBKR",
         "timeframe": TIMEFRAME_LABEL,
+        "status": "ok" if summaries and not failures else "partial" if summaries else "error",
+        "automated_trading": False,
+        "symbol_count": len(summaries),
+        "success_count": len(summaries),
+        "failure_count": len(failures),
+        "common_completed_h1_utc": next(iter(completed_times)) if len(completed_times) == 1 else None,
         "symbols": [s["TechnicalKlines"] for s in summaries],
     }
     klines_path = out_dir / KLINES_FILE_NAME
@@ -1766,6 +1833,9 @@ def main() -> int:
         for repo_path, payload in repo_outputs:
             write_json_file(repo_path, payload)
             print(f"[REPO] {repo_path}")
+        analysis_input_path = repo_root / "runtime" / "analysis_input.json"
+        if ensure_analysis_input_technical_contract(analysis_input_path):
+            print(f"[REPO] updated data_contract: {analysis_input_path}")
 
     if summaries:
         summary_path = out_dir / "summary.csv"
