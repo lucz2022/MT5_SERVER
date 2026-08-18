@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.png
 mt5-gpt-data/
+ibkr_technical_output/gate_publish_state.json
+ibkr_technical_runtime/

@@ -924,16 +924,20 @@ def evaluate_location(
         status = f"CONFIRMED_{direction}"
         level_no = 3
 
-    if other["score"] >= 55 and abs(best["score"] - other["score"]) < 10:
+    best_side_alert_level = level_no
+    conflict = other["score"] >= 55 and abs(best["score"] - other["score"]) < 10
+    if conflict:
         status = "CONFLICT_WATCH"
         direction = "NEUTRAL"
 
     return {
         "setup_status": status,
-        "alert_level": level_no,
+        "alert_level": 1 if conflict else level_no,
+        "conflict": conflict,
+        "best_side_alert_level": best_side_alert_level,
         "candidate_direction": direction,
         "location_score": int(score),
-        "analysis_required": bool(level_no >= 2),
+        "analysis_required": bool(best_side_alert_level >= 2),
         "price_z20_completed": safe_float(z_completed),
         "price_z20_snapshot": safe_float(z_now),
         "ema20_atr_distance_completed": safe_float(ema20_atr_completed),
@@ -1345,6 +1349,8 @@ def draw_chart(
             "candidate_direction": location["candidate_direction"],
             "score": location["location_score"],
             "analysis_required": location["analysis_required"],
+            "conflict": location["conflict"],
+            "best_side_alert_level": location["best_side_alert_level"],
             "best_side_direction": zone_side.get("direction"),
             "best_side_level": zone_side.get("level"),
             "best_side_distance_atr": zone_side.get("distance_atr"),
@@ -1427,33 +1433,6 @@ def write_json_file(path: Path, payload: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(json_safe(payload), ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
-
-
-def ensure_analysis_input_technical_contract(path: Path) -> bool:
-    """Persist Gate detail paths without reformatting the generated compact bundle."""
-    payload = load_json_file(path, None)
-    if not isinstance(payload, dict):
-        return False
-    contract = payload.setdefault("data_contract", {})
-    if not isinstance(contract, dict):
-        return False
-    details = contract.setdefault("detail_files", {})
-    if not isinstance(details, dict):
-        return False
-    expected = {
-        "technical_gate": "runtime/technical_gate/technical_triggers.json",
-        "technical_klines": "latest/technical_klines.json",
-    }
-    if all(details.get(key) == value for key, value in expected.items()):
-        return False
-    details.update(expected)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(json_safe(payload), ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
-    return True
 
 
 def _alert_zone_key(trigger: Dict[str, Any]) -> str:
@@ -1766,8 +1745,8 @@ def main() -> int:
             }
         )
     trigger_payload = {
-        "schema": "technical_triggers.v2.1",
-        "schema_version": "2.1",
+        "schema": "technical_triggers.v2.2",
+        "schema_version": "2.2",
         "generated_at_utc": generated_utc,
         "source": "IBKR",
         "timeframe": TIMEFRAME_LABEL,
@@ -1781,7 +1760,7 @@ def main() -> int:
             "confirmed_level": 3,
             "wework_env": WEWORK_WEBHOOK_ENV,
         },
-        "triggers": triggers,
+        "symbols": triggers,
     }
     success_count = sum(str(item.get("status") or "").casefold() == "ok" for item in triggers)
     failure_count = len(triggers) - success_count
@@ -1833,9 +1812,6 @@ def main() -> int:
         for repo_path, payload in repo_outputs:
             write_json_file(repo_path, payload)
             print(f"[REPO] {repo_path}")
-        analysis_input_path = repo_root / "runtime" / "analysis_input.json"
-        if ensure_analysis_input_technical_contract(analysis_input_path):
-            print(f"[REPO] updated data_contract: {analysis_input_path}")
 
     if summaries:
         summary_path = out_dir / "summary.csv"
