@@ -294,20 +294,41 @@ def launch_analysis(repo: Path) -> None:
     5-15 more, and the :12 market feed and next hour's Gate are both waiting
     on this process to finish on time. The analysis script does its own
     already-analyzed dedup, so launching it here is always safe.
+
+    Detached + no console means stdout/stderr have nowhere to go unless
+    explicitly redirected -- without this, every [RUN]/[WARN]/[RETRY] line
+    and the final status JSON from run_local_analysis.py is silently lost
+    when the scheduled task fires it, leaving only the terminal ok/partial/
+    error status in local_analysis_state.json with no detail trail.
     """
     script = repo / "automation" / "run_local_analysis.py"
     if not script.is_file():
         print(f"[WARN] local analysis script missing, not launched: {script}", file=sys.stderr)
         return
+    log_dir = repo / "runtime" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "local_analysis.log"
     command = [sys.executable, "-X", "utf8", "-u", str(script), "--repo-root", str(repo)]
     creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    subprocess.Popen(
-        command,
-        cwd=repo,
-        creationflags=creation_flags,
-        close_fds=True,
-    )
-    print("[ANALYSIS] launched local dual-model analysis (detached)")
+    with log_path.open("a", encoding="utf-8", errors="replace") as log_handle:
+        log_handle.write(
+            f"\n=== {datetime.now(UTC).isoformat().replace('+00:00', 'Z')} launch ===\n"
+        )
+        log_handle.flush()
+        subprocess.Popen(
+            command,
+            cwd=repo,
+            creationflags=creation_flags,
+            close_fds=True,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    # The child inherited its own duplicate of the handle on spawn (Windows
+    # CreateProcess with bInheritHandles=True), so closing this parent-side
+    # copy here does not affect the child's writes -- it only stops this
+    # short-lived scheduled-task process from leaking the descriptor.
+    print(f"[ANALYSIS] launched local dual-model analysis (detached), log: {log_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:

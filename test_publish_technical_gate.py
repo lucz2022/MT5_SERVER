@@ -233,13 +233,32 @@ class TechnicalGatePublisherTests(unittest.TestCase):
             (repo / "automation").mkdir()
             (repo / "automation" / "run_local_analysis.py").write_text("", encoding="utf-8")
             launch_analysis(repo)
-        mocked_popen.assert_called_once()
-        command = mocked_popen.call_args.args[0]
-        self.assertEqual(command[0], sys.executable)
-        self.assertIn(str(repo / "automation" / "run_local_analysis.py"), command)
-        self.assertIn("--repo-root", command)
-        self.assertIn(str(repo), command)
-        mocked_popen.return_value.wait.assert_not_called()
+            mocked_popen.assert_called_once()
+            command = mocked_popen.call_args.args[0]
+            self.assertEqual(command[0], sys.executable)
+            self.assertIn(str(repo / "automation" / "run_local_analysis.py"), command)
+            self.assertIn("--repo-root", command)
+            self.assertIn(str(repo), command)
+            mocked_popen.return_value.wait.assert_not_called()
+            # Without redirection, a detached child with no console loses all its
+            # print() output -- it must not go to that dark hole. See docstring.
+            kwargs = mocked_popen.call_args.kwargs
+            self.assertIsNotNone(kwargs.get("stdout"))
+            self.assertEqual(kwargs.get("stderr"), subprocess.STDOUT)
+            self.assertTrue((repo / "runtime" / "logs" / "local_analysis.log").is_file())
+
+    @patch("publish_technical_gate.subprocess.Popen")
+    def test_launch_analysis_appends_across_multiple_launches(self, mocked_popen):
+        """The log must accumulate across hourly launches, not truncate each time."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            (repo / "automation").mkdir()
+            (repo / "automation" / "run_local_analysis.py").write_text("", encoding="utf-8")
+            log_path = repo / "runtime" / "logs" / "local_analysis.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("previous run marker\n", encoding="utf-8")
+            launch_analysis(repo)
+            self.assertIn("previous run marker", log_path.read_text(encoding="utf-8"))
 
     @patch("publish_technical_gate.subprocess.Popen")
     def test_launch_analysis_warns_and_skips_when_script_missing(self, mocked_popen):
