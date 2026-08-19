@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime
@@ -14,6 +15,8 @@ from publish_technical_gate import (
     BEIJING,
     PUBLISH_PATHS,
     assert_clean,
+    gate_requires_analysis,
+    launch_analysis,
     notify_publisher_status,
     publication_reasons,
     push_with_rebase,
@@ -191,6 +194,7 @@ class TechnicalGatePublisherTests(unittest.TestCase):
                 no_pull=True,
                 no_push=True,
                 no_wework=True,
+                no_analysis=True,
             )
             with patch("publish_technical_gate.within_analysis_window", return_value=False):
                 exit_code = publisher_main(args)
@@ -208,6 +212,145 @@ class TechnicalGatePublisherTests(unittest.TestCase):
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["publisher_status"], "skipped_out_of_analysis_window")
             self.assertEqual(state["last_completed_h1_utc"], "2026-08-18T23:00:00Z")
+
+    def test_gate_requires_analysis_true_when_an_ok_symbol_flags_it(self):
+        self.assertTrue(gate_requires_analysis(gate("2026-08-18T12:00:00Z", setup="SETUP_READY_LONG")))
+
+    def test_gate_requires_analysis_false_when_no_symbol_flags_it(self):
+        self.assertFalse(gate_requires_analysis(gate("2026-08-18T12:00:00Z")))
+
+    def test_gate_requires_analysis_ignores_errored_symbols(self):
+        errored = gate("2026-08-18T12:00:00Z", status="error")
+        self.assertFalse(gate_requires_analysis(errored))
+
+    def test_gate_requires_analysis_handles_empty_gate(self):
+        self.assertFalse(gate_requires_analysis({}))
+
+    @patch("publish_technical_gate.subprocess.Popen")
+    def test_launch_analysis_spawns_detached_and_does_not_wait(self, mocked_popen):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            (repo / "automation").mkdir()
+            (repo / "automation" / "run_local_analysis.py").write_text("", encoding="utf-8")
+            launch_analysis(repo)
+        mocked_popen.assert_called_once()
+        command = mocked_popen.call_args.args[0]
+        self.assertEqual(command[0], sys.executable)
+        self.assertIn(str(repo / "automation" / "run_local_analysis.py"), command)
+        self.assertIn("--repo-root", command)
+        self.assertIn(str(repo), command)
+        mocked_popen.return_value.wait.assert_not_called()
+
+    @patch("publish_technical_gate.subprocess.Popen")
+    def test_launch_analysis_warns_and_skips_when_script_missing(self, mocked_popen):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launch_analysis(Path(temp_dir))
+        mocked_popen.assert_not_called()
+
+    def _prepare_real_publish_repo(self, root: Path, *, analysis_required: bool) -> tuple[Path, Path]:
+        repo = root / "repo"
+        repo.mkdir()
+        old_gate = {"common_completed_h1_utc": "2026-08-18T15:00:00Z", "symbols": []}
+        for relative in PUBLISH_PATHS:
+            target = repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(old_gate), encoding="utf-8")
+        new_gate = {
+            "common_completed_h1_utc": "2026-08-18T23:00:00Z",
+            "symbols": [
+                {
+                    "symbol": "GC",
+                    "analysis_symbol": "XAUUSD",
+                    "status": "ok",
+                    "error": None,
+                    "location": {
+                        "setup_status": "SETUP_READY_LONG",
+                        "candidate_direction": "LONG",
+                        "analysis_required": analysis_required,
+                        "conflict": False,
+                        "best_side_alert_level": 2,
+                    },
+                }
+            ],
+        }
+        producer = root / "producer.py"
+        producer.write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "repo = Path(sys.argv[sys.argv.index('--repo-root') + 1])\n"
+            f"gate = {new_gate!r}\n"
+            "(repo / 'runtime/technical_gate/technical_triggers.json').write_text(json.dumps(gate))\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+        return repo, producer
+
+    def test_real_publish_launches_analysis_when_gate_requires_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo, producer = self._prepare_real_publish_repo(root, analysis_required=True)
+            args = argparse.Namespace(
+                repo_root=repo,
+                producer=producer,
+                output_dir=root / "output",
+                state_file=root / "state.json",
+                force_publish=False,
+                no_pull=True,
+                no_push=True,
+                no_wework=True,
+                no_analysis=False,
+            )
+            with patch("publish_technical_gate.within_analysis_window", return_value=True), \
+                 patch("publish_technical_gate.launch_analysis") as mocked_launch:
+                exit_code = publisher_main(args)
+            self.assertEqual(exit_code, 0)
+            mocked_launch.assert_called_once_with(repo)
+
+    def test_real_publish_skips_analysis_when_gate_does_not_require_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo, producer = self._prepare_real_publish_repo(root, analysis_required=False)
+            args = argparse.Namespace(
+                repo_root=repo,
+                producer=producer,
+                output_dir=root / "output",
+                state_file=root / "state.json",
+                force_publish=False,
+                no_pull=True,
+                no_push=True,
+                no_wework=True,
+                no_analysis=False,
+            )
+            with patch("publish_technical_gate.within_analysis_window", return_value=True), \
+                 patch("publish_technical_gate.launch_analysis") as mocked_launch:
+                exit_code = publisher_main(args)
+            self.assertEqual(exit_code, 0)
+            mocked_launch.assert_not_called()
+
+    def test_real_publish_skips_analysis_when_no_analysis_flag_set(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo, producer = self._prepare_real_publish_repo(root, analysis_required=True)
+            args = argparse.Namespace(
+                repo_root=repo,
+                producer=producer,
+                output_dir=root / "output",
+                state_file=root / "state.json",
+                force_publish=False,
+                no_pull=True,
+                no_push=True,
+                no_wework=True,
+                no_analysis=True,
+            )
+            with patch("publish_technical_gate.within_analysis_window", return_value=True), \
+                 patch("publish_technical_gate.launch_analysis") as mocked_launch:
+                exit_code = publisher_main(args)
+            self.assertEqual(exit_code, 0)
+            mocked_launch.assert_not_called()
 
     @patch.dict(
         "os.environ",

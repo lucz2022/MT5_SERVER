@@ -276,6 +276,40 @@ def record_publisher_failure(path: Path, error: Exception, *, notify: bool) -> N
     )
 
 
+def gate_requires_analysis(gate: dict[str, Any]) -> bool:
+    """True when any symbol's location flags a full AI analysis as warranted."""
+    return any(
+        isinstance(item, dict)
+        and str(item.get("status") or "").casefold() == "ok"
+        and isinstance(item.get("location"), dict)
+        and item["location"].get("analysis_required") is True
+        for item in (gate.get("symbols") or gate.get("triggers") or [])
+    )
+
+
+def launch_analysis(repo: Path) -> None:
+    """Fire-and-forget the local dual-model analysis; the publisher must not wait on it.
+
+    IBKR collection already costs the publisher ~5 minutes; model calls add
+    5-15 more, and the :12 market feed and next hour's Gate are both waiting
+    on this process to finish on time. The analysis script does its own
+    already-analyzed dedup, so launching it here is always safe.
+    """
+    script = repo / "automation" / "run_local_analysis.py"
+    if not script.is_file():
+        print(f"[WARN] local analysis script missing, not launched: {script}", file=sys.stderr)
+        return
+    command = [sys.executable, "-X", "utf8", "-u", str(script), "--repo-root", str(repo)]
+    creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    subprocess.Popen(
+        command,
+        cwd=repo,
+        creationflags=creation_flags,
+        close_fds=True,
+    )
+    print("[ANALYSIS] launched local dual-model analysis (detached)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate and conditionally publish Technical Gate")
     parser.add_argument("--repo-root", type=Path, default=DEFAULT_REPO)
@@ -287,6 +321,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-pull", action="store_true")
     parser.add_argument("--no-push", action="store_true")
     parser.add_argument("--no-wework", action="store_true")
+    parser.add_argument("--no-analysis", action="store_true",
+                        help="do not launch the local analysis process even when the Gate requires it")
     return parser
 
 
@@ -393,6 +429,8 @@ def main(args: argparse.Namespace | None = None) -> int:
     write_success_state(
         state_path, state_payload, previous_state, notify=not args.no_wework
     )
+    if not args.no_analysis and gate_requires_analysis(new_gate):
+        launch_analysis(repo)
     print("[DONE] Technical Gate published")
     return 0 if producer_result.returncode == 0 else producer_result.returncode
 
