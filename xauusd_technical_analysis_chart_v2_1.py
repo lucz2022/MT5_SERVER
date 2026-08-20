@@ -98,6 +98,11 @@ VP_WINDOW = 120              # VP/TPO uses an independent recent-cost window
 OUTPUT_DIR = str(Path(__file__).resolve().parent / "ibkr_technical_output")
 REQUEST_TIMEOUT = 20.0
 SNAPSHOT_TIMEOUT = 2.0
+# IB 的 HMDS farm 偶发短暂断开重连（观察到的典型模式：整点重置约 1 分钟无响应，
+# 网关自重启约 15 秒），单次 20s 超时经常正好落在这个窗口里。重试覆盖到这类瞬时
+# 抖动；连接持续数小时的真正故障仍会在重试耗尽后如实报错，交给下一个整点计划任务处理。
+HIST_RETRY_ATTEMPTS = 2
+HIST_RETRY_BACKOFF_SECONDS: Tuple[float, ...] = (15.0, 25.0)
 OUTPUT_WIDTH_PX = 1440
 OUTPUT_HEIGHT_PX = 2560
 OUTPUT_DPI = 180
@@ -320,6 +325,32 @@ class IBGateway(EWrapper, EClient):
         duration: str,
         bar_size: str,
         timeout: float = REQUEST_TIMEOUT,
+        retry_attempts: int = HIST_RETRY_ATTEMPTS,
+        retry_backoff: Tuple[float, ...] = HIST_RETRY_BACKOFF_SECONDS,
+    ) -> pd.DataFrame:
+        """timeout 内拿不到数据视为 farm 连接抖动，按 retry_backoff 重试；
+        重试耗尽后仍抛出最后一次的 TimeoutError，保持原有失败信息格式不变。"""
+        attempt = 0
+        while True:
+            try:
+                return self._request_historical_once(spec, duration, bar_size, timeout)
+            except TimeoutError as exc:
+                if attempt >= retry_attempts:
+                    raise
+                delay = retry_backoff[min(attempt, len(retry_backoff) - 1)]
+                print(
+                    f"  [RETRY] {spec.display_symbol}: {exc} -> retry {attempt + 1}/{retry_attempts} in {delay:.0f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                attempt += 1
+
+    def _request_historical_once(
+        self,
+        spec: ContractSpec,
+        duration: str,
+        bar_size: str,
+        timeout: float,
     ) -> pd.DataFrame:
         req_id = self.alloc_req_id()
         ev = threading.Event()
