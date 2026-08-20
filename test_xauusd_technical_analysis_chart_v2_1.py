@@ -39,7 +39,7 @@ class HistoricalRetryTests(unittest.TestCase):
                 raise TimeoutError(f"{spec.display_symbol}: historical data timeout ({timeout:.0f}s)")
             return fake_df()
 
-        with patch.object(IBGateway, "_request_historical_once", side_effect=flaky, autospec=True), \
+        with patch.object(ib, "_request_historical_once", side_effect=flaky), \
              patch("xauusd_technical_analysis_chart_v2_1.time.sleep") as mock_sleep:
             df = ib.get_historical(make_spec(), "2 M", "1 hour")
 
@@ -55,7 +55,7 @@ class HistoricalRetryTests(unittest.TestCase):
         def always_times_out(spec, duration, bar_size, timeout):
             raise TimeoutError(f"{spec.display_symbol}: historical data timeout ({timeout:.0f}s)")
 
-        with patch.object(IBGateway, "_request_historical_once", side_effect=always_times_out, autospec=True), \
+        with patch.object(ib, "_request_historical_once", side_effect=always_times_out), \
              patch("xauusd_technical_analysis_chart_v2_1.time.sleep") as mock_sleep:
             with self.assertRaises(TimeoutError):
                 ib.get_historical(make_spec("ES"), "2 M", "1 hour", retry_attempts=2)
@@ -70,7 +70,7 @@ class HistoricalRetryTests(unittest.TestCase):
             attempts.append(1)
             raise RuntimeError("IB 354: Requested market data is not subscribed")
 
-        with patch.object(IBGateway, "_request_historical_once", side_effect=permission_error, autospec=True), \
+        with patch.object(ib, "_request_historical_once", side_effect=permission_error), \
              patch("xauusd_technical_analysis_chart_v2_1.time.sleep") as mock_sleep:
             with self.assertRaises(RuntimeError):
                 ib.get_historical(make_spec("NQ"), "2 M", "1 hour")
