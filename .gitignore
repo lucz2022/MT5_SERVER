@@ -1,6 +1,8 @@
 __pycache__/
-*.pyc
+.pytest_cache/
+*.py[cod]
 *.png
+*.log
 mt5-gpt-data/
-ibkr_technical_output/gate_publish_state.json
+ibkr_technical_output*/
 ibkr_technical_runtime/

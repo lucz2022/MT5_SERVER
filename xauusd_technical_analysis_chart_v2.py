@@ -34,8 +34,9 @@ IBKR Gateway 多品种 H1 技术位置雷达 + 企业微信预警
 
 说明：
 - OHLC 直接从 IB Gateway/TWS API 的 reqHistoricalData 拉取；不再使用模拟行情。
-- 当前价格优先使用 IB 行情快照；快照不可用时回退为最后一根 H1 K 线 Close。
-- 外汇没有有效成交量时，不伪造成交量；副图自动改用 MACD Histogram。
+- 当前价格优先使用 IB 行情快照；快照不可用时回退为最后一根已完成 H1 K 线 Close。
+- 主图布林带使用已完成日线 Close 计算，并映射显示在 H1 K 线上。
+- 价格图下方依次显示 MACD、TDI；有有效成交量时，最下方额外显示 OBV 振荡器。
 - 支撑/阻力、HH/HL/LH/LL、趋势线、背离全部根据当前数据自动计算。
 - 结构计算只使用已完成 H1；实时 snapshot 仅用于“是否进入位置区域”的判断。
 - 新增 Price Z-score、EMA/ATR 乖离、RVOL、HVN/LVN、位置评分与 NO_CHASE 过滤。
@@ -67,6 +68,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 try:
@@ -90,7 +92,9 @@ IB_CLIENT_ID = 86
 
 TIMEFRAME_LABEL = "1H"
 BAR_SIZE = "1 hour"
-DURATION = "2 M"            # 为 SHOW_LAST_N 留足 H1 数据
+DURATION = "2 M"              # 为 SHOW_LAST_N 留足 H1 数据
+DAILY_BB_BAR_SIZE = "1 day"
+DAILY_BB_DURATION = "2 Y"
 SHOW_LAST_N = 280
 OUTPUT_DIR = "ibkr_technical_output"
 REQUEST_TIMEOUT = 20.0
@@ -131,7 +135,7 @@ FX_CURRENCIES = {
 SPECIAL_CONTRACTS: Dict[str, Dict[str, str]] = {
     # Continuous futures are appropriate for uninterrupted historical analysis.
     # IBKR does not provide real-time data for CONTFUT, so the script will
-    # naturally fall back to the latest H1 Close when a snapshot is unavailable.
+    # naturally fall back to the latest completed daily Close when a snapshot is unavailable.
     "GC":     {"symbol": "GC",     "secType": "CONTFUT", "exchange": "COMEX", "currency": "USD", "what": "TRADES"},
     "SI":     {"symbol": "SI",     "secType": "CONTFUT", "exchange": "COMEX", "currency": "USD", "what": "TRADES"},
     "XAUUSD": {"symbol": "XAUUSD", "secType": "CMDTY", "exchange": "SMART", "currency": "USD", "what": "MIDPOINT"},
@@ -488,6 +492,42 @@ def filter_completed_h1(df: pd.DataFrame, now_utc: Optional[pd.Timestamp] = None
     return completed if not completed.empty else df.iloc[:-1].copy()
 
 
+def filter_completed_daily(df: pd.DataFrame, now_utc: Optional[pd.Timestamp] = None) -> pd.DataFrame:
+    """只保留已收盘日线，排除当前北京时间自然日。"""
+    if df.empty:
+        return df.copy()
+    now = pd.Timestamp.now(tz="UTC") if now_utc is None else pd.Timestamp(now_utc)
+    if now.tzinfo is None:
+        now = now.tz_localize("UTC")
+    cutoff = now.tz_convert("Asia/Shanghai").tz_localize(None).normalize()
+    completed = df[df.index < cutoff].copy()
+    return completed if not completed.empty else df.iloc[:-1].copy()
+
+
+def map_daily_bollinger_to_h1(daily_raw: pd.DataFrame, h1_index: pd.DatetimeIndex) -> pd.DataFrame:
+    """以已完成日线 Close 计算布林带，并前向映射到每根 H1 K 线。"""
+    daily = filter_completed_daily(daily_raw)
+    if len(daily) < 20:
+        raise RuntimeError(f"日线数据不足以计算布林带 ({len(daily)} < 20)")
+
+    close = daily["Close"].astype(float)
+    basis = close.rolling(20, min_periods=20).mean()
+    std = close.rolling(20, min_periods=20).std(ddof=0)
+    bands = pd.DataFrame({
+        "D1_BB_BASIS": basis,
+        "D1_BB_UPPER_20": basis + 2.0 * std,
+        "D1_BB_LOWER_20": basis - 2.0 * std,
+        "D1_BB_UPPER_25": basis + 2.5 * std,
+        "D1_BB_LOWER_25": basis - 2.5 * std,
+        "D1_BB_UPPER_30": basis + 3.0 * std,
+        "D1_BB_LOWER_30": basis - 3.0 * std,
+    }, index=daily.index)
+    h1_days = pd.DatetimeIndex(h1_index).normalize()
+    mapped = bands.reindex(h1_days, method="ffill")
+    mapped.index = h1_index
+    return mapped
+
+
 def beijing_naive_to_utc_iso(ts: pd.Timestamp) -> str:
     t = pd.Timestamp(ts)
     if t.tzinfo is None:
@@ -508,6 +548,29 @@ def add_indicators(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     df["ATR14"] = tr.rolling(14, min_periods=3).mean()
     df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
     df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
+    ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = ema12 - ema26
+    df["MACD_SIGNAL"] = df["MACD"].ewm(span=9, adjust=False).mean()
+    df["MACD_HIST"] = df["MACD"] - df["MACD_SIGNAL"]
+
+    # Traders Dynamic Index: RSI(13), price line(2), signal line(7), bands(34, 1.618).
+    delta = df["Close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / 13, adjust=False, min_periods=13).mean()
+    avg_loss = loss.ewm(alpha=1 / 13, adjust=False, min_periods=13).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi13 = 100.0 - (100.0 / (1.0 + rs))
+    rsi13 = rsi13.where(avg_loss.ne(0), 100.0)
+    rsi13 = rsi13.where(avg_gain.ne(0) | avg_loss.ne(0), 50.0)
+    df["TDI_RSI"] = rsi13
+    df["TDI_PRICE"] = rsi13.rolling(2, min_periods=1).mean()
+    df["TDI_SIGNAL"] = rsi13.rolling(7, min_periods=1).mean()
+    df["TDI_MBL"] = rsi13.rolling(34, min_periods=10).mean()
+    tdi_std = rsi13.rolling(34, min_periods=10).std(ddof=0)
+    df["TDI_UPPER"] = df["TDI_MBL"] + 1.618 * tdi_std
+    df["TDI_LOWER"] = df["TDI_MBL"] - 1.618 * tdi_std
 
     # 位置/追价过滤：用波动率标准化，而不是只看绝对均线乖离。
     df["SMA20"] = df["Close"].rolling(20, min_periods=10).mean()
@@ -517,6 +580,10 @@ def add_indicators(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     df["PRICE_Z20"] = (df["Close"] - df["SMA20"]) / safe_std
     df["BB_UPPER"] = df["SMA20"] + 2.0 * df["STD20"]
     df["BB_LOWER"] = df["SMA20"] - 2.0 * df["STD20"]
+    df["BB_UPPER_25"] = df["SMA20"] + 2.5 * df["STD20"]
+    df["BB_LOWER_25"] = df["SMA20"] - 2.5 * df["STD20"]
+    df["BB_UPPER_30"] = df["SMA20"] + 3.0 * df["STD20"]
+    df["BB_LOWER_30"] = df["SMA20"] - 3.0 * df["STD20"]
     df["EMA20_ATR_DIST"] = (df["Close"] - df["EMA20"]) / safe_atr
     df["EMA50_ATR_DIST"] = (df["Close"] - df["EMA50"]) / safe_atr
 
@@ -545,11 +612,7 @@ def add_indicators(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     else:
         df["VOL_MA20"] = np.nan
         df["RVOL20"] = np.nan
-        ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-        ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-        macd = ema12 - ema26
-        signal = macd.ewm(span=9, adjust=False).mean()
-        df["OSC"] = macd - signal
+        df["OSC"] = df["MACD_HIST"]
         osc_name = "MACD Histogram"
 
     return df, osc_name
@@ -667,9 +730,9 @@ def fmt_price(price: Optional[float], decimals: int) -> str:
 
 
 def compute_profile_stats(df: pd.DataFrame, bins: int = PROFILE_BINS) -> Dict[str, Any]:
-    """计算 H1 Volume Profile；无可靠成交量时退化为 TPO。
+    """计算当前周期 Volume Profile；无可靠成交量时退化为 TPO。
 
-    注意：H1 每根 bar 的量仍近似分配到 typical price，因此这是位置筛选用途，
+    注意：每根 bar 的量仍近似分配到 typical price，因此这是位置筛选用途，
     不是逐笔/分钟级精确 Volume-at-Price。GC/ES/NQ/YM 有真实 TRADES volume 时
     可信度高于 MIDPOINT/无量品种。
     """
@@ -974,6 +1037,7 @@ def draw_chart(
     raw_df: pd.DataFrame,
     snapshot_price: Optional[float],
     output_path: Path,
+    daily_raw: pd.DataFrame,
 ) -> Dict[str, object]:
     completed_raw = filter_completed_h1(raw_df)
     if len(completed_raw) < 30:
@@ -992,6 +1056,7 @@ def draw_chart(
     divergence = detect_divergence(df, all_highs, all_lows)
 
     df_plot = df.iloc[-SHOW_LAST_N:].copy()
+    daily_bb = map_daily_bollinger_to_h1(daily_raw, df_plot.index)
     plot_start = len(df) - len(df_plot)
     highs = [i - plot_start for i in all_highs if i >= plot_start]
     lows = [i - plot_start for i in all_lows if i >= plot_start]
@@ -1004,15 +1069,25 @@ def draw_chart(
         figsize=(OUTPUT_WIDTH_PX / OUTPUT_DPI, OUTPUT_HEIGHT_PX / OUTPUT_DPI),
         facecolor=BG_COLOR,
     )
+    has_real_volume = bool(df.attrs.get("has_real_volume", False))
     grid = fig.add_gridspec(
-        2, 2, height_ratios=[3, 1], width_ratios=[4.2, 1],
-        hspace=0.055, wspace=0.08,
+        4 if has_real_volume else 3,
+        2,
+        height_ratios=[3, 1, 1, 1] if has_real_volume else [3, 1, 1],
+        width_ratios=[4.2, 1],
+        hspace=0.055,
+        wspace=0.08,
     )
     ax1 = fig.add_subplot(grid[0, 0])
-    ax2 = fig.add_subplot(grid[1, 0])
+    ax_macd = fig.add_subplot(grid[1, 0])
+    ax_tdi = fig.add_subplot(grid[2, 0])
+    ax_obv = fig.add_subplot(grid[3, 0]) if has_real_volume else None
     ax_info = fig.add_subplot(grid[:, 1])
     ax1.set_facecolor(BG_COLOR)
-    ax2.set_facecolor(BG_COLOR)
+    ax_macd.set_facecolor(BG_COLOR)
+    ax_tdi.set_facecolor(BG_COLOR)
+    if ax_obv is not None:
+        ax_obv.set_facecolor(BG_COLOR)
     ax_info.set_facecolor(BG_COLOR)
     ax_info.axis("off")
 
@@ -1027,11 +1102,19 @@ def draw_chart(
                                 facecolor=color, edgecolor=color, linewidth=0.5))
         ax1.plot([i, i], [l, h], color=color, linewidth=0.55)
 
-    # EMA + Bollinger（淡化，主要用于位置上下文）
-    ax1.plot(range(len(df_plot)), df_plot["EMA20"], linewidth=1.0, alpha=0.85, label="EMA20")
-    ax1.plot(range(len(df_plot)), df_plot["EMA50"], linewidth=1.0, alpha=0.75, label="EMA50")
-    ax1.plot(range(len(df_plot)), df_plot["BB_UPPER"], linewidth=0.65, alpha=0.30, linestyle=":")
-    ax1.plot(range(len(df_plot)), df_plot["BB_LOWER"], linewidth=0.65, alpha=0.30, linestyle=":")
+    # Daily Bollinger Bands mapped to H1 candles: D1 SMA20 with 2.0, 2.5 and 3.0 envelopes.
+    bb_x = range(len(df_plot))
+    ax1.plot(bb_x, daily_bb["D1_BB_BASIS"], color="#cfd8dc", linewidth=0.85, alpha=0.72)
+    ax1.plot(bb_x, daily_bb["D1_BB_UPPER_20"], color="#42a5f5", linewidth=0.75, alpha=0.72)
+    ax1.plot(bb_x, daily_bb["D1_BB_LOWER_20"], color="#42a5f5", linewidth=0.75, alpha=0.72)
+    ax1.plot(bb_x, daily_bb["D1_BB_UPPER_25"], color="#ab47bc", linewidth=0.70,
+             alpha=0.66, linestyle="--")
+    ax1.plot(bb_x, daily_bb["D1_BB_LOWER_25"], color="#ab47bc", linewidth=0.70,
+             alpha=0.66, linestyle="--")
+    ax1.plot(bb_x, daily_bb["D1_BB_UPPER_30"], color="#ffb74d", linewidth=0.70,
+             alpha=0.62, linestyle=":")
+    ax1.plot(bb_x, daily_bb["D1_BB_LOWER_30"], color="#ffb74d", linewidth=0.70,
+             alpha=0.62, linestyle=":")
 
     # Auto support / resistance zones
     zone_half = max(atr_now * 0.12, abs(current_price) * 0.0001)
@@ -1072,35 +1155,86 @@ def draw_chart(
         color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=12,
     )
 
-    # Oscillator
-    osc = df_plot["OSC"].fillna(0).to_numpy(dtype=float)
+    # MACD（始终显示；有真实成交量时位于 OBV 上方）
     x = np.arange(len(df_plot))
-    ax2.fill_between(x, osc, 0, where=osc >= 0, color=UP_COLOR, alpha=0.28, interpolate=True)
-    ax2.fill_between(x, osc, 0, where=osc < 0, color=DOWN_COLOR, alpha=0.28, interpolate=True)
-    ax2.plot(x, osc, color=LINE_COLOR, linewidth=1.0, alpha=0.9)
-    ax2.axhline(0, color=LINE_COLOR, linewidth=0.7, alpha=0.7)
+    macd = df_plot["MACD"].fillna(0).to_numpy(dtype=float)
+    macd_signal = df_plot["MACD_SIGNAL"].fillna(0).to_numpy(dtype=float)
+    macd_hist = df_plot["MACD_HIST"].fillna(0).to_numpy(dtype=float)
+    ax_macd.bar(x, macd_hist, width=0.76,
+                color=np.where(macd_hist >= 0, UP_COLOR, DOWN_COLOR), alpha=0.55)
+    ax_macd.plot(x, macd, color="#42a5f5", linewidth=1.05, label="MACD (12,26)")
+    ax_macd.plot(x, macd_signal, color="#ffb74d", linewidth=0.95, label="Signal (9)")
+    ax_macd.axhline(0, color=LINE_COLOR, linewidth=0.7, alpha=0.7)
+    ax_macd.set_xlim(-3, len(df_plot) + 34)
+    ax_macd.grid(True, color=GRID_COLOR, linewidth=0.5, alpha=0.5)
+    ax_macd.tick_params(colors=TEXT_COLOR)
+    ax_macd.set_ylabel("MACD\n(12,26,9)", color=TEXT_COLOR)
+    ax_macd.legend(loc="upper left", facecolor=BG_COLOR, edgecolor=GRID_COLOR,
+                   labelcolor=TEXT_COLOR, fontsize=7)
 
-    if divergence:
+    # TDI: RSI price/signal lines, market baseline and volatility bands.
+    tdi_price = df_plot["TDI_PRICE"].to_numpy(dtype=float)
+    tdi_signal = df_plot["TDI_SIGNAL"].to_numpy(dtype=float)
+    tdi_mbl = df_plot["TDI_MBL"].to_numpy(dtype=float)
+    tdi_upper = df_plot["TDI_UPPER"].to_numpy(dtype=float)
+    tdi_lower = df_plot["TDI_LOWER"].to_numpy(dtype=float)
+    valid_band = np.isfinite(tdi_upper) & np.isfinite(tdi_lower)
+    ax_tdi.fill_between(x, tdi_lower, tdi_upper, where=valid_band,
+                        color="#5c6bc0", alpha=0.12, interpolate=True)
+    ax_tdi.plot(x, tdi_upper, color="#7e8ce0", linewidth=0.65, alpha=0.65)
+    ax_tdi.plot(x, tdi_lower, color="#7e8ce0", linewidth=0.65, alpha=0.65)
+    ax_tdi.plot(x, tdi_mbl, color="#ffd166", linewidth=0.9, label="MBL 34")
+    ax_tdi.plot(x, tdi_price, color=UP_COLOR, linewidth=1.15, label="Price 2")
+    ax_tdi.plot(x, tdi_signal, color=DOWN_COLOR, linewidth=1.05, label="Signal 7")
+    ax_tdi.axhline(68, color=DOWN_COLOR, linestyle="--", linewidth=0.65, alpha=0.55)
+    ax_tdi.axhline(50, color=LINE_COLOR, linestyle=":", linewidth=0.65, alpha=0.65)
+    ax_tdi.axhline(32, color=UP_COLOR, linestyle="--", linewidth=0.65, alpha=0.55)
+    ax_tdi.set_ylim(0, 100)
+    ax_tdi.set_xlim(-3, len(df_plot) + 34)
+    ax_tdi.grid(True, color=GRID_COLOR, linewidth=0.5, alpha=0.5)
+    ax_tdi.tick_params(colors=TEXT_COLOR)
+    ax_tdi.set_ylabel("TDI\n(13,2,7)", color=TEXT_COLOR)
+    ax_tdi.legend(loc="upper left", facecolor=BG_COLOR, edgecolor=GRID_COLOR,
+                  labelcolor=TEXT_COLOR, fontsize=7, ncol=3)
+
+    # OBV oscillator（仅在有真实成交量时显示）
+    osc = df_plot["OSC"].fillna(0).to_numpy(dtype=float)
+    if ax_obv is not None:
+        ax_obv.fill_between(x, osc, 0, where=osc >= 0, color=UP_COLOR, alpha=0.28, interpolate=True)
+        ax_obv.fill_between(x, osc, 0, where=osc < 0, color=DOWN_COLOR, alpha=0.28, interpolate=True)
+        ax_obv.plot(x, osc, color=LINE_COLOR, linewidth=1.0, alpha=0.9)
+        ax_obv.axhline(0, color=LINE_COLOR, linewidth=0.7, alpha=0.7)
+
+    if divergence and ax_obv is not None:
         div_label, a_global, b_global = divergence
         a, b = a_global - plot_start, b_global - plot_start
         if 0 <= a < len(df_plot) and 0 <= b < len(df_plot):
             c = DOWN_COLOR if div_label.startswith("BEARISH") else UP_COLOR
-            ax2.plot([a, b], [osc[a], osc[b]], color=c, linestyle="--", linewidth=1.7)
-            ax2.annotate(div_label, xy=(b, osc[b]), xytext=(max(0, b - 55), osc[b]),
-                         color=c, fontsize=9, fontweight="bold",
-                         arrowprops=dict(arrowstyle="->", color=c, lw=1.0))
+            ax_obv.plot([a, b], [osc[a], osc[b]], color=c, linestyle="--", linewidth=1.7)
+            ax_obv.annotate(div_label, xy=(b, osc[b]), xytext=(max(0, b - 55), osc[b]),
+                            color=c, fontsize=9, fontweight="bold",
+                            arrowprops=dict(arrowstyle="->", color=c, lw=1.0))
 
-    ax2.set_xlim(-3, len(df_plot) + 34)
-    ax2.grid(True, color=GRID_COLOR, linewidth=0.5, alpha=0.5)
-    ax2.tick_params(colors=TEXT_COLOR)
-    ax2.set_ylabel(osc_name, color=TEXT_COLOR)
+    if ax_obv is not None:
+        ax_obv.set_xlim(-3, len(df_plot) + 34)
+        ax_obv.grid(True, color=GRID_COLOR, linewidth=0.5, alpha=0.5)
+        ax_obv.tick_params(colors=TEXT_COLOR)
+        ax_obv.set_ylabel(osc_name, color=TEXT_COLOR)
 
     xticks = np.unique(np.linspace(0, len(df_plot) - 1, min(9, len(df_plot)), dtype=int))
     ax1.set_xticks(xticks)
     ax1.set_xticklabels([])
-    ax2.set_xticks(xticks)
-    ax2.set_xticklabels([df_plot.index[i].strftime("%m/%d\n%H:%M") for i in xticks],
-                        color=TEXT_COLOR, fontsize=8)
+    ax_macd.set_xticks(xticks)
+    ax_macd.set_xticklabels([])
+    ax_tdi.set_xticks(xticks)
+    if ax_obv is None:
+        ax_tdi.set_xticklabels([df_plot.index[i].strftime("%m/%d\n%H:%M") for i in xticks],
+                                color=TEXT_COLOR, fontsize=8)
+    else:
+        ax_tdi.set_xticklabels([])
+        ax_obv.set_xticks(xticks)
+        ax_obv.set_xticklabels([df_plot.index[i].strftime("%m/%d\n%H:%M") for i in xticks],
+                               color=TEXT_COLOR, fontsize=8)
 
     # Right info panel
     s_lines = "\n".join([f"S{i+1}: {fmt_price(p, dec)}  touches={t}" for i, (p, t) in enumerate(supports)]) or "S: N/A"
@@ -1140,11 +1274,16 @@ def draw_chart(
                            edgecolor=GRID_COLOR, linewidth=1.2, alpha=0.97))
 
     legend_elements = [
+        Line2D([0], [0], color="#cfd8dc", lw=0.85, label="D1 BB Basis SMA20"),
+        Line2D([0], [0], color="#42a5f5", lw=0.75, label="D1 BB +/-2.0"),
+        Line2D([0], [0], color="#ab47bc", lw=0.70, linestyle="--", label="D1 BB +/-2.5"),
+        Line2D([0], [0], color="#ffb74d", lw=0.70, linestyle=":", label="D1 BB +/-3.0"),
         mpatches.Patch(facecolor=(*ZONE_SUPPORT[:3], 0.30), edgecolor="none", label="Auto Support Zone"),
         mpatches.Patch(facecolor=(*ZONE_RESIST[:3], 0.30), edgecolor="none", label="Auto Resistance Zone"),
     ]
     ax1.legend(handles=legend_elements, loc="upper left",
-               facecolor=BG_COLOR, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR, fontsize=8)
+               facecolor=BG_COLOR, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR,
+               fontsize=7, ncol=2)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.subplots_adjust(left=0.075, right=0.97, bottom=0.055, top=0.93)
@@ -1443,14 +1582,16 @@ def load_symbol_config(path: Path) -> List[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="IB Gateway H1 technical location radar + WeCom alert")
+    p = argparse.ArgumentParser(description="IB Gateway H1 technical location radar with D1 Bollinger Bands + WeCom alert")
     p.add_argument("symbols", nargs="*", help="查询代码或中文品种名；不填时显示品种列表")
     p.add_argument("--host", default=IB_HOST)
     p.add_argument("--port", type=int, default=IB_PORT)
     p.add_argument("--client-id", type=int, default=IB_CLIENT_ID)
     p.add_argument("--output-dir", default=OUTPUT_DIR)
-    p.add_argument("--duration", default=DURATION, help='IB duration，例如 "2 M"')
-    p.add_argument("--bar-size", default=BAR_SIZE, help='IB barSize，例如 "1 hour"')
+    p.add_argument("--duration", default=DURATION, help='H1 历史范围，例如 "2 M"')
+    p.add_argument("--bar-size", default=BAR_SIZE, help='H1 barSize，例如 "1 hour"')
+    p.add_argument("--daily-bb-duration", default=DAILY_BB_DURATION,
+                   help='日线布林带历史范围，例如 "2 Y"')
     p.add_argument("--no-snapshot", action="store_true", help="不请求实时/延迟快照，使用最后完整 H1 Close")
     p.add_argument("--list", action="store_true", help="列出中文品种、查询代码和 IB 合约后退出")
     p.add_argument("--batch", action="store_true", help="批量运行 DEFAULT_SYMBOLS")
@@ -1527,8 +1668,12 @@ def main() -> int:
                 )
 
                 df = ib.get_historical(spec, args.duration, args.bar_size)
+                daily_bb_df = ib.get_historical(spec, args.daily_bb_duration, DAILY_BB_BAR_SIZE)
                 completed_count = len(filter_completed_h1(df))
-                print(f"  bars: raw={len(df)}, completed_h1={completed_count} | {df.index[0]} -> {df.index[-1]}")
+                completed_daily_count = len(filter_completed_daily(daily_bb_df))
+                print(f"  H1 bars: raw={len(df)}, completed={completed_count} | {df.index[0]} -> {df.index[-1]}")
+                print(f"  D1 BB bars: raw={len(daily_bb_df)}, completed={completed_daily_count} | "
+                      f"{daily_bb_df.index[0]} -> {daily_bb_df.index[-1]}")
 
                 snap = None
                 if not args.no_snapshot:
@@ -1539,7 +1684,7 @@ def main() -> int:
 
                 file_name = f"{re.sub(r'[^A-Z0-9_-]+', '_', symbol)}_{TIMEFRAME_LABEL}.png"
                 output_path = out_dir / file_name
-                summary = draw_chart(symbol, df, snap, output_path)
+                summary = draw_chart(symbol, df, snap, output_path, daily_raw=daily_bb_df)
                 summaries.append(summary)
                 print(
                     f"  DONE price={summary['Price']} trend={summary['Trend']} structure={summary['Structure']} "
